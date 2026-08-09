@@ -39,6 +39,11 @@ if "zerodha_session" not in st.session_state:
     st.session_state.zerodha_session = None
 if "zerodha_holdings" not in st.session_state:
     st.session_state.zerodha_holdings = None
+if "holder_to_data" not in st.session_state:
+    st.session_state.holder_to_data = {}
+if "prev_holder_to_data" not in st.session_state:
+    st.session_state.prev_holder_to_data = {}
+    
 # Bumping these forces the matching file_uploader to remount as a brand-new
 # widget, which is the only way to make an uploader forget a previously
 # selected file - clearing session_state alone doesn't touch it.
@@ -164,22 +169,62 @@ st.sidebar.markdown("---")
 # --------------------------------------------------------------------------
 # Sidebar - Save / Resume Session JSON
 # --------------------------------------------------------------------------
+
+def _cas_to_dict(cas: CASData) -> dict:
+    """Serializes a CASData object to dicts for JSON export"""
+    return {
+        "holder_name": cas.holder_name,
+        "total_value": cas.total_value,
+        "asset_summary": cas.asset_summary.to_dict(orient="records") if not cas.asset_summary.empty else [],
+        "equity_holdings": cas.equity_holdings.to_dict(orient="records") if not cas.equity_holdings.empty else [],
+        "mf_in_demat_holdings": cas.mf_in_demat_holdings.to_dict(orient="records") if not cas.mf_in_demat_holdings.empty else [],
+        "other_holdings": cas.other_holdings.to_dict(orient="records") if not cas.other_holdings.empty else [],
+        "mf_folio_holdings": cas.mf_folio_holdings.to_dict(orient="records") if not cas.mf_folio_holdings.empty else [],
+        "valuation_trend": cas.valuation_trend.to_dict(orient="records") if not cas.valuation_trend.empty else [],
+    }
+
+def _dict_to_cas(d: dict) -> CASData:
+    """Deserializes dicts back to a CASData object, preserving columns even if empty"""
+    cas = CASData()
+    cas.holder_name = d.get("holder_name", "")
+    cas.total_value = d.get("total_value", 0.0)
+    
+    def _restore_df(data_list, empty_cols):
+        if not data_list:
+            return pd.DataFrame(columns=empty_cols)
+        return pd.DataFrame(data_list)
+        
+    cas.asset_summary = _restore_df(d.get("asset_summary", []), ["Asset Class", "Value (₹)", "% of Portfolio"])
+    cas.equity_holdings = _restore_df(d.get("equity_holdings", []), ["ISIN", "Security", "Instrument Type", "Value (₹)"])
+    cas.mf_in_demat_holdings = _restore_df(d.get("mf_in_demat_holdings", []), ["ISIN", "Security", "Instrument Type", "Value (₹)"])
+    cas.other_holdings = _restore_df(d.get("other_holdings", []), ["ISIN", "Security", "Instrument Type", "Value (₹)", "Category"])
+    cas.mf_folio_holdings = _restore_df(d.get("mf_folio_holdings", []), ["Scheme", "ISIN", "Instrument Type", "Folio No.", "Invested (₹)", "Valuation (₹)", "Unrealised P/L (₹)", "Unrealised P/L (%)"])
+    cas.valuation_trend = _restore_df(d.get("valuation_trend", []), ["Month", "Portfolio Value (₹)", "Change (₹)", "Change (%)"])
+    
+    return cas
+
 with st.sidebar.expander("💾 Save or resume session data"):
-    st.caption("Download your loaded transactions as a JSON, or upload a previous JSON here to restore data.")
+    st.caption("Download your loaded CAS data and transactions as a JSON, or upload a previous JSON here to restore the entire dashboard without your PDFs.")
     
     # Save Button
-    if st.session_state.txn_sources:
+    if st.session_state.holder_to_data or st.session_state.txn_sources:
         import json as _json
         def _session_to_json() -> bytes:
             fh = st.session_state.get('last_family_holders', [])
             payload = {
-                "version": 1,
+                "version": 2, # Bumped version for full CAS state saving
                 "exported_at": datetime.now().isoformat(),
                 "family_holders": fh,
                 "txn_sources": {
                     key: df.assign(Date=df["Date"].astype(str)).to_dict(orient="records")
                     for key, df in st.session_state.txn_sources.items()
                 },
+                "holder_to_data": {
+                    k: _cas_to_dict(v) for k, v in st.session_state.holder_to_data.items()
+                },
+                "prev_holder_to_data": {
+                    k: _cas_to_dict(v) for k, v in st.session_state.prev_holder_to_data.items()
+                }
             }
             return _json.dumps(payload, indent=2, default=str).encode("utf-8")
 
@@ -211,19 +256,33 @@ with st.sidebar.expander("💾 Save or resume session data"):
             payload = _json.loads(resume_file.getvalue().decode("utf-8"))
             
             # Verify it's actually an app-generated session file
-            if not isinstance(payload, dict) or "txn_sources" not in payload:
+            if not isinstance(payload, dict) or ("txn_sources" not in payload and "holder_to_data" not in payload):
                 st.error("Invalid format: Please upload a JSON session file generated by this app.")
             else:
-                restored_count = 0
+                restored_items = 0
+                
+                # Restore Transactions
                 for key, records in payload.get("txn_sources", {}).items():
                     if not records:
                         continue
                     df = pd.DataFrame(records)
                     df["Date"] = pd.to_datetime(df["Date"]).dt.date
                     st.session_state.txn_sources[key] = df
-                    restored_count += 1
+                    restored_items += 1
                 
-                if restored_count:
+                # Restore CAS state across all tabs
+                if "holder_to_data" in payload and payload["holder_to_data"]:
+                    st.session_state.holder_to_data = {
+                        k: _dict_to_cas(v) for k, v in payload["holder_to_data"].items()
+                    }
+                    restored_items += 1
+                    
+                if "prev_holder_to_data" in payload and payload["prev_holder_to_data"]:
+                    st.session_state.prev_holder_to_data = {
+                        k: _dict_to_cas(v) for k, v in payload["prev_holder_to_data"].items()
+                    }
+                    
+                if restored_items > 0:
                     # Set success flag
                     st.session_state["show_json_success"] = True
                     
@@ -234,9 +293,19 @@ with st.sidebar.expander("💾 Save or resume session data"):
                     
                     st.rerun()
                 else:
-                    st.warning("That file didn't have any transaction sources in it.")
+                    st.warning("That file didn't have any parseable portfolio or transaction sources in it.")
         except Exception as e:
             st.error(f"Couldn't read that session file: {e}")
+            
+    if st.session_state.holder_to_data or st.session_state.txn_sources:
+        if st.button("🗑️ Clear all loaded data", use_container_width=True):
+            st.session_state.holder_to_data = {}
+            st.session_state.prev_holder_to_data = {}
+            st.session_state.txn_sources = {}
+            st.session_state.zerodha_holdings = None
+            for k in st.session_state.uploader_nonce:
+                st.session_state.uploader_nonce[k] += 1
+            st.rerun()
 
 st.sidebar.markdown("---")
 st.sidebar.caption(
@@ -244,24 +313,6 @@ st.sidebar.caption(
     "or get an MF Central summary from **mfcentral.com** (mutual funds only, no demat "
     "equity - useful if that's all you or a family member holds)."
 )
-
-if not uploaded_files:
-    st.title("Portfolio Summary & XIRR Tracker")
-    st.write(
-        "Upload one or more CDSL Consolidated Account Statement (CAS) PDFs in the sidebar "
-        "to get a tabular breakdown of your holdings by asset class - upload one per family "
-        "member for a combined household view."
-    )
-    st.info(
-        "**A quick note on XIRR:** a monthly CAS shows your *current* holdings and, for "
-        "mutual funds, the cumulative amount invested - but not the dates of each individual "
-        "purchase or redemption. True XIRR needs those dates. This app will show you the "
-        "absolute return already computed for each mutual fund, and lets you optionally "
-        "upload a transaction history (see the XIRR tab) to get real, dated XIRR by "
-        "holding and by asset class."
-    )
-    st.stop()
-
 
 def _assign_holder_names(files) -> dict[str, CASData]:
     """
@@ -292,12 +343,32 @@ def _assign_holder_names(files) -> dict[str, CASData]:
         result[label] = parsed
     return result
 
+# Integrate PDF uploads into session state
+if uploaded_files:
+    st.session_state.holder_to_data = _assign_holder_names(uploaded_files)
 
-holder_to_data = _assign_holder_names(uploaded_files)
+# Fetch latest state
+holder_to_data = st.session_state.holder_to_data
+
+# Bypass the "Stop" wall if session data is loaded
 if not holder_to_data:
-    st.error("None of the uploaded files could be parsed as a CDSL CAS.")
+    st.title("Portfolio Summary & XIRR Tracker")
+    st.write(
+        "Upload one or more CDSL Consolidated Account Statement (CAS) PDFs in the sidebar "
+        "to get a tabular breakdown of your holdings by asset class - OR upload a saved JSON "
+        "session file to restore your portfolio dashboard directly."
+    )
+    st.info(
+        "**A quick note on XIRR:** a monthly CAS shows your *current* holdings and, for "
+        "mutual funds, the cumulative amount invested - but not the dates of each individual "
+        "purchase or redemption. True XIRR needs those dates. This app will show you the "
+        "absolute return already computed for each mutual fund, and lets you optionally "
+        "upload a transaction history (see the XIRR tab) to get real, dated XIRR by "
+        "holding and by asset class."
+    )
     st.stop()
 
+# Continue building dashboard based on Restored OR Uploaded data
 data = combine_family(holder_to_data)
 family_holders = list(holder_to_data.keys())
 st.session_state['last_family_holders'] = family_holders
@@ -311,18 +382,20 @@ if data.total_value == 0:
     st.stop()
 
 prev_data = None
-prev_holder_to_data = {}
 if prev_uploaded_files:
+    prev_h_to_d = {}
     for i, f in enumerate(prev_uploaded_files):
         with st.spinner(f"Parsing previous CAS {f.name}..."):
             parsed = load_cas(f.getvalue())
         if parsed.total_value > 0:
-            prev_holder_to_data[parsed.holder_name or f"{f.name}_{i}"] = parsed
+            prev_h_to_d[parsed.holder_name or f"{f.name}_{i}"] = parsed
         else:
             st.sidebar.error(f"Couldn't parse previous-month file '{f.name}' - skipped.")
-    if prev_holder_to_data:
-        prev_data = combine_family(prev_holder_to_data)
+    st.session_state.prev_holder_to_data = prev_h_to_d
 
+prev_holder_to_data = st.session_state.prev_holder_to_data
+if prev_holder_to_data:
+    prev_data = combine_family(prev_holder_to_data)
 
 def _with_variance(current: pd.DataFrame, previous: pd.DataFrame | None, key_cols: list[str], value_col: str) -> pd.DataFrame:
     """Left-joins current onto previous by key_cols and adds Δ₹/Δ% columns. Passthrough if no previous data."""
@@ -1050,12 +1123,6 @@ with tab_connect:
         st.markdown("---")
         total_loaded = sum(len(df) for df in st.session_state.txn_sources.values())
         st.caption(f"**{total_loaded} transactions loaded across {len(st.session_state.txn_sources)} source(s).** See the XIRR tab for results.")
-        if st.button("🗑️ Clear all imported transaction data"):
-            st.session_state.txn_sources = {}
-            st.session_state.zerodha_holdings = None
-            for k in st.session_state.uploader_nonce:
-                st.session_state.uploader_nonce[k] += 1
-            st.rerun()
 
 
 # --------------------------------------------------------------------------
