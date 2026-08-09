@@ -162,36 +162,19 @@ logo_html = (
 )
 
 st.markdown(f"""
-<div style="
-    background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%);
-    padding: 16px 28px;
-    border-radius: 12px;
-    margin-bottom: 16px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-">
-    <div style="display: flex; align-items: center;">
-        <div style="flex: 0 0 auto;">
-            <div style="color:#ffffff; font-size:26px; font-weight:700; letter-spacing:-0.5px; white-space:nowrap;">
-                📊 Portfolio Summary & XIRR Tracker
-            </div>
-            <div style="color:#94a3b8; font-size:13px; margin-top:3px; white-space:nowrap;">
-                Upload CAS · Track XIRR · Analyze Portfolio
-            </div>
-        </div>
-        <div style="flex: 1 1 auto; text-align:center; color:#94a3b8; font-size:26px; font-style:italic; padding:0 12px;">
-            Developed by Sandeep Narang
-        </div>
-        <div style="flex: 0 0 auto; display:flex; align-items:center; gap:12px;">
-            {logo_html}
-        </div>
-    </div>
-    <div style="margin-top:14px; padding-top:12px; border-top:1px solid rgba(148,163,184,0.2); font-size:11px; line-height:1.6;">
-        <span style="color:#f59e0b;">⚠️ Disclaimer:</span>
-        <span style="color:#94a3b8;"> This application is for personal tracking and informational purposes only. It parses your data locally. Projections and XIRR are estimates.</span>
-        <br/>
-        <span style="color:#34d399;">🔒 Privacy:</span>
-        <span style="color:#94a3b8;"> Your financial data — CAS PDFs and transaction histories — never leaves your browser session. It is never stored, transmitted, or retained anywhere; it's lost when you close the tab unless you securely download your session using the JSON Save tool.</span>
-    </div>
+<div style="background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%); padding: 16px 28px; border-radius: 12px; margin-bottom: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
+<div style="display: flex; align-items: center; justify-content: space-between;">
+<div>
+<div style="color:#ffffff; font-size:26px; font-weight:700; letter-spacing:-0.5px; white-space:nowrap;">📊 Portfolio Summary & XIRR Tracker</div>
+<div style="color:#94a3b8; font-size:13px; margin-top:3px; white-space:nowrap;">Upload CAS · Track XIRR · Analyze Portfolio</div>
+</div>
+<div style="text-align:center; color:#94a3b8; font-size:18px; font-style:italic;">Developed by Sandeep Narang</div>
+<div>{logo_html}</div>
+</div>
+<div style="margin-top:14px; padding-top:12px; border-top:1px solid rgba(148,163,184,0.2); font-size:11px; line-height:1.6;">
+<span style="color:#f59e0b;">⚠️ Disclaimer:</span> <span style="color:#94a3b8;">This application is for personal tracking and informational purposes only. It parses your data locally. Projections and XIRR are estimates.</span><br/>
+<span style="color:#34d399;">🔒 Privacy:</span> <span style="color:#94a3b8;">Your financial data — CAS PDFs and transaction histories — never leaves your browser session. It is never stored, transmitted, or retained anywhere; it's lost when you close the tab unless you securely download your session using the JSON Save tool.</span>
+</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -213,35 +196,25 @@ tab_settings, tab_summary, tab_holdings, tab_xirr, tab_trend, tab_connect = st.t
 # --------------------------------------------------------------------------
 with tab_settings:
     st.markdown("""
-    <div style="
-        background: linear-gradient(135deg, #1e3a5f 0%, #0f172a 100%);
-        border-left: 4px solid #2563eb;
-        border-radius: 8px;
-        padding: 14px 20px;
-        margin-bottom: 20px;
-    ">
-    <details>
-    <summary style="color:#93c5fd; font-size:14px; font-weight:600; cursor:pointer; list-style:none;">
-        ℹ️ How to use this planner &nbsp;·&nbsp;
-        <span style="color:#64748b; font-weight:400; font-size:12px;">Click to expand</span>
-    </summary>
-    <div style="margin-top:12px; color:#cbd5e1; font-size:13px; line-height:1.7;">
-    
-    <b style="color:#93c5fd;">Step 1 — Upload your CAS PDF</b><br/>
-    Upload your CDSL CAS (Consolidated Account Statement) or MF Central summary directly below. You can upload multiple PDFs (e.g., one for each family member) to generate a combined household view. This populates your current portfolio holdings, asset breakdowns, and 12-month trend.
-    
-    <br/><br/><b style="color:#93c5fd;">Step 2 — Review your Holdings</b><br/>
-    Navigate to the <b>Asset Class Summary</b> and <b>Holdings Detail</b> tabs to see cleanly organized, tabular breakdowns of everything you currently own.
-    
-    <br/><br/><b style="color:#93c5fd;">Step 3 — Import Transactions for Real XIRR</b><br/>
-    Your CAS alone only shows current values. To calculate an accurate, annualized <b>XIRR</b>, the app needs your purchase and redemption history. Navigate to the <b>Connect & Import</b> tab to securely import your tradebook from Zerodha, Kuvera, GLC, or a manual CSV.
-    
-    <br/><br/><b style="color:#93c5fd;">Step 4 — Save your Session</b><br/>
-    Don't want to re-upload everything tomorrow? Once your PDFs and transactions are loaded, use the <b>Save Session Data</b> button below to download a secure, offline JSON file. Next time, just drop that JSON right back into the uploader below to instantly restore your entire dashboard!
-    </div>
-    </details>
-    </div>
-    """, unsafe_allow_html=True)
+<div style="background: linear-gradient(135deg, #1e3a5f 0%, #0f172a 100%); border-left: 4px solid #2563eb; border-radius: 8px; padding: 14px 20px; margin-bottom: 20px;">
+<details>
+<summary style="color:#93c5fd; font-size:14px; font-weight:600; cursor:pointer; list-style:none;">
+ℹ️ How to use this planner &nbsp;·&nbsp;
+<span style="color:#64748b; font-weight:400; font-size:12px;">Click to expand</span>
+</summary>
+<div style="margin-top:12px; color:#cbd5e1; font-size:13px; line-height:1.7;">
+<b style="color:#93c5fd;">Step 1 — Upload your CAS PDF</b><br/>
+Upload your CDSL CAS (Consolidated Account Statement) or MF Central summary directly below. You can upload multiple PDFs (e.g., one for each family member) to generate a combined household view. This populates your current portfolio holdings, asset breakdowns, and 12-month trend.
+<br/><br/><b style="color:#93c5fd;">Step 2 — Review your Holdings</b><br/>
+Navigate to the <b>Asset Class Summary</b> and <b>Holdings Detail</b> tabs to see cleanly organized, tabular breakdowns of everything you currently own.
+<br/><br/><b style="color:#93c5fd;">Step 3 — Import Transactions for Real XIRR</b><br/>
+Your CAS alone only shows current values. To calculate an accurate, annualized <b>XIRR</b>, the app needs your purchase and redemption history. Navigate to the <b>Connect & Import</b> tab to securely import your tradebook from Zerodha, Kuvera, GLC, or a manual CSV.
+<br/><br/><b style="color:#93c5fd;">Step 4 — Save your Session</b><br/>
+Don't want to re-upload everything tomorrow? Once your PDFs and transactions are loaded, use the <b>Save Session Data</b> button below to download a secure, offline JSON file. Next time, just drop that JSON right back into the uploader below to instantly restore your entire dashboard!
+</div>
+</details>
+</div>
+""", unsafe_allow_html=True)
     
     col_up1, col_up2 = st.columns(2)
     
