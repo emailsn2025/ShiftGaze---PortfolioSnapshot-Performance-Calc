@@ -703,24 +703,28 @@ with tab_xirr:
         "Holder": xirr_by_holder_df,
     }[chart_level]
     
-    chart_df = chart_source.dropna(subset=["XIRR (%)"]).copy()
-    if chart_df.empty:
+    # SAFE CHECK: Ensure the dataframe and column exist before filtering
+    if chart_source.empty or "XIRR (%)" not in chart_source.columns:
         st.info("No solvable XIRR values yet to plot. Please upload transactions via Connect & Import.")
     else:
-        chart_df["Current Value"] = chart_df["Current Value (₹)"].apply(fmt_inr)
-        
-        # Determine color mapping for bubble chart dynamically based on selection
-        use_color_map = ASSET_COLORS if chart_level == "Asset Class" else None
-        
-        fig_bubble = px.scatter(
-            chart_df, x=chart_level, y="XIRR (%)", size="Current Value (₹)",
-            color=chart_level, size_max=70, color_discrete_map=use_color_map,
-            hover_data={"Current Value (₹)": False, "Current Value": True, chart_level: False},
-        )
-        fig_bubble.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=450, showlegend=False, xaxis_title="")
-        fig_bubble.add_hline(y=0, line_dash="dot", line_color="grey")
-        st.plotly_chart(fig_bubble, use_container_width=True)
-        
+        chart_df = chart_source.dropna(subset=["XIRR (%)"]).copy()
+        if chart_df.empty:
+            st.info("No solvable XIRR values yet to plot. Please upload transactions via Connect & Import.")
+        else:
+            chart_df["Current Value"] = chart_df["Current Value (₹)"].apply(fmt_inr)
+            
+            # Determine color mapping for bubble chart dynamically based on selection
+            use_color_map = ASSET_COLORS if chart_level == "Asset Class" else None
+            
+            fig_bubble = px.scatter(
+                chart_df, x=chart_level, y="XIRR (%)", size="Current Value (₹)",
+                color=chart_level, size_max=70, color_discrete_map=use_color_map,
+                hover_data={"Current Value (₹)": False, "Current Value": True, chart_level: False},
+            )
+            fig_bubble.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=450, showlegend=False, xaxis_title="")
+            fig_bubble.add_hline(y=0, line_dash="dot", line_color="grey")
+            st.plotly_chart(fig_bubble, use_container_width=True)
+            
     st.markdown("---")
 
     # 2. XIRR Tables Below Chart
