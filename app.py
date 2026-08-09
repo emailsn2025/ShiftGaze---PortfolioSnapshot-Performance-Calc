@@ -229,7 +229,8 @@ Don't want to re-upload everything tomorrow? Once your PDFs and transactions are
         # Confirm names immediately if files uploaded
         if uploaded_files:
             result = {}
-            seen = set()
+            # Base the 'seen' set on the current session memory to avoid duplicate labels
+            seen = set(st.session_state.holder_to_data.keys()) 
             st.markdown("**Confirm who's who:**")
             for i, f in enumerate(uploaded_files):
                 with st.spinner(f"Parsing {f.name}..."):
@@ -249,7 +250,8 @@ Don't want to re-upload everything tomorrow? Once your PDFs and transactions are
                 result[label] = parsed
             
             if st.button("Apply CAS Data"):
-                st.session_state.holder_to_data = result
+                # UPDATE merges the new records instead of overwriting the dictionary
+                st.session_state.holder_to_data.update(result) 
                 st.session_state.uploader_nonce["cas"] += 1
                 st.rerun()
 
@@ -266,7 +268,8 @@ Don't want to re-upload everything tomorrow? Once your PDFs and transactions are
                         parsed = load_cas(f.getvalue())
                     if parsed.total_value > 0:
                         prev_h_to_d[parsed.holder_name or f"{f.name}_{i}"] = parsed
-                st.session_state.prev_holder_to_data = prev_h_to_d
+                # UPDATE merges previous files without overwriting
+                st.session_state.prev_holder_to_data.update(prev_h_to_d) 
                 st.session_state.uploader_nonce["prev_cas"] += 1
                 st.rerun()
 
@@ -501,42 +504,31 @@ if not pie_df.empty:
     fig_pie.update_traces(textinfo="percent+label", hovertemplate="%{label}<br>%{customdata[0]}<br>%{percent}<extra></extra>")
     fig_pie.update_layout(showlegend=False, margin=dict(t=10, b=10, l=10, r=10), height=350)
 
-# 2. Instrument Breakdown Bar Chart
+# 2. Bar Chart (Descending Visually)
 fig_ib = None
 if not view_instrument_breakdown.empty:
     ib_sorted = view_instrument_breakdown.sort_values("Value (₹)", ascending=True) 
-    fig_ib = px.bar(
-        ib_sorted, x="Value (₹)", y="Instrument Type", color="Asset Class", orientation="h", 
-        text=ib_sorted["Value (₹)"].apply(fmt_inr_short), color_discrete_map=ASSET_COLORS
-    )
+    fig_ib = px.bar(ib_sorted, x="Value (₹)", y="Instrument Type", color="Asset Class", orientation="h", text=ib_sorted["Value (₹)"].apply(fmt_inr_short), color_discrete_map=ASSET_COLORS)
     fig_ib.update_traces(textposition="outside", cliponaxis=False)
-    
-    # Explicitly force Plotly to sort the categories by total value
-    # 'total ascending' puts the lowest value at the bottom (y=0) and the highest at the top
     fig_ib.update_yaxes(categoryorder="total ascending")
     
-    # Custom x-axis ticks
     max_val = ib_sorted["Value (₹)"].max() if not ib_sorted.empty else 0
     ticks = get_axis_ticks(0, max_val, n=6)
     fig_ib.update_xaxes(tickvals=ticks, ticktext=[fmt_inr_short(v) for v in ticks], title="Value (₹)")
-    fig_ib.update_layout(
-        margin=dict(t=40, b=10, l=10, r=10), height=100 + 32 * len(ib_sorted), 
-        yaxis_title="", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
-    )
+    fig_ib.update_layout(margin=dict(t=40, b=10, l=10, r=10), height=100 + 32 * len(ib_sorted), yaxis_title="", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
+
 # 3. Line Chart
 fig_trend = None
 if not data.valuation_trend.empty:
     fig_trend = px.line(data.valuation_trend, x="Month", y="Portfolio Value (₹)", markers=True, color_discrete_sequence=[ASSET_COLORS["Equity"]])
-    # Custom y-axis ticks
     min_v = data.valuation_trend["Portfolio Value (₹)"].min()
     max_v = data.valuation_trend["Portfolio Value (₹)"].max()
     ticks = get_axis_ticks(min_v * 0.95, max_v * 1.05, n=6, force_zero=False)
     fig_trend.update_yaxes(tickvals=ticks, ticktext=[fmt_inr_short(v) for v in ticks], title="Portfolio Value (₹)")
     fig_trend.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=350)
 
-# 4. Bubble Chart (Pre-generated for PDF export using Asset Class)
+# 4. Bubble Chart
 fig_bubble_export = None
-# SAFE CHECK: Ensure dataframe and column exist
 if not xirr_by_asset_class_df.empty and "XIRR (%)" in xirr_by_asset_class_df.columns:
     chart_df_exp = xirr_by_asset_class_df.dropna(subset=["XIRR (%)"]).copy()
     if not chart_df_exp.empty:
@@ -590,7 +582,7 @@ with st.container(border=True):
         st.download_button("📊 Download all tables (Excel)", data=report_export.build_excel(export_sections), file_name=f"portfolio_report_{date.today().isoformat()}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     with dl_col2:
         pdf_summary = {"Total Portfolio Value": fmt_inr(view_data.total_value)}
-        if not xirr_by_asset_class_df.empty:
+        if not xirr_by_asset_class_df.empty and "XIRR (%)" in xirr_by_asset_class_df.columns:
             for _, r in xirr_by_asset_class_df.iterrows():
                 if pd.notna(r["XIRR (%)"]) and not isinstance(r["XIRR (%)"], str): pdf_summary[f"XIRR - {r['Asset Class']}"] = f"{float(r['XIRR (%)']):.2f}%"
         pdf_bytes = report_export.build_pdf(
@@ -603,7 +595,7 @@ with st.container(border=True):
 
 
 # --------------------------------------------------------------------------
-# Tab 2: Asset class summary
+# Tab 2: Asset Class Summary
 # --------------------------------------------------------------------------
 with tab_summary:
     st.subheader("Holdings by asset class")
@@ -619,6 +611,8 @@ with tab_summary:
     if "Change vs Last Month (₹)" in view_asset_summary.columns: total_specs["Change vs Last Month (₹)"] = fmt_inr
     display_df = _with_total_row(display_df, view_asset_summary, total_specs)
     st.dataframe(display_df, hide_index=True, width="stretch")
+    if "Change vs Last Month (₹)" not in view_asset_summary.columns:
+        st.caption("💡 Upload last month's CAS in the Settings tab to see variance columns here.")
         
     st.markdown("---")
     st.subheader("Breakdown by instrument type")
@@ -639,7 +633,7 @@ with tab_summary:
 
 
 # --------------------------------------------------------------------------
-# Tab 3: Holdings detail
+# Tab 3: Holdings Detail
 # --------------------------------------------------------------------------
 with tab_holdings:
     st.subheader("Mutual Fund Folios")
@@ -692,7 +686,6 @@ with tab_holdings:
 # Tab 4: XIRR (Bubble Chart First)
 # --------------------------------------------------------------------------
 with tab_xirr:
-    # 1. Bubble Chart Up Top
     st.subheader("Size vs. return")
     st.caption("Bubble size is current value, position on the vertical axis is XIRR.")
     chart_options = ["Instrument Type", "Asset Class"] + (["Holder"] if is_family else [])
@@ -704,7 +697,6 @@ with tab_xirr:
         "Holder": xirr_by_holder_df,
     }[chart_level]
     
-    # SAFE CHECK: Ensure the dataframe and column exist before filtering
     if chart_source.empty or "XIRR (%)" not in chart_source.columns:
         st.info("No solvable XIRR values yet to plot. Please upload transactions via Connect & Import.")
     else:
@@ -713,8 +705,6 @@ with tab_xirr:
             st.info("No solvable XIRR values yet to plot. Please upload transactions via Connect & Import.")
         else:
             chart_df["Current Value"] = chart_df["Current Value (₹)"].apply(fmt_inr)
-            
-            # Determine color mapping for bubble chart dynamically based on selection
             use_color_map = ASSET_COLORS if chart_level == "Asset Class" else None
             
             fig_bubble = px.scatter(
@@ -728,7 +718,6 @@ with tab_xirr:
             
     st.markdown("---")
 
-    # 2. XIRR Tables Below Chart
     def _fmt_xirr_table(df: pd.DataFrame) -> pd.DataFrame:
         out = df.copy()
         out["Current Value (₹)"] = out["Current Value (₹)"].apply(fmt_inr)
