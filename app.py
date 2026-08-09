@@ -54,6 +54,10 @@ def fmt_inr(x: float) -> str:
     """Format a number in Indian comma style, rounded to the nearest rupee - e.g. 3,12,57,114"""
     if x is None or pd.isna(x):
         return "-"
+    try:
+        x = float(x)
+    except (ValueError, TypeError):
+        return "-"
     neg = x < 0
     x = round(abs(x))
     int_part = str(x)
@@ -74,6 +78,10 @@ def fmt_inr(x: float) -> str:
 def fmt_inr_short(x: float) -> str:
     """Abbreviated Indian units for chart axes/labels - e.g. ₹50L, ₹1.24Cr, ₹8,400"""
     if x is None or pd.isna(x):
+        return "-"
+    try:
+        x = float(x)
+    except (ValueError, TypeError):
         return "-"
     neg = x < 0
     x = abs(x)
@@ -569,7 +577,7 @@ export_charts = [fig for fig in [fig_pie, fig_ib, fig_trend] if fig is not None]
 # --------------------------------------------------------------------------
 # Download everything - Excel workbook + PDF report, from whatever's loaded
 # --------------------------------------------------------------------------
-def _append_raw_total(df: pd.DataFrame, cols_to_sum: list[str], label: str = "Total") -> pd.DataFrame:
+def _append_raw_total(df: pd.DataFrame, cols_to_sum: list, label: str = "Total") -> pd.DataFrame:
     if df is None or df.empty:
         return df
     totals = {col: "" for col in df.columns}
@@ -611,14 +619,13 @@ with st.container(border=True):
             data=report_export.build_excel(export_sections),
             file_name=f"portfolio_report_{date.today().isoformat()}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            width="stretch",
         )
     with dl_col2:
         pdf_summary = {"Total Portfolio Value": fmt_inr(view_data.total_value)}
         if not xirr_by_asset_class_df.empty:
             for _, r in xirr_by_asset_class_df.iterrows():
-                if pd.notna(r["XIRR (%)"]):
-                    pdf_summary[f"XIRR - {r['Asset Class']}"] = f"{r['XIRR (%)']:.2f}%"
+                if pd.notna(r["XIRR (%)"]) and not isinstance(r["XIRR (%)"], str):
+                    pdf_summary[f"XIRR - {r['Asset Class']}"] = f"{float(r['XIRR (%)']):.2f}%"
         pdf_bytes = report_export.build_pdf(
             title="Portfolio Summary Report" + (f" - {holder_view}" if is_family and holder_view != "👪 All Family" else ""),
             generated_note=f"Generated {date.today().isoformat()} from CAS data",
@@ -631,7 +638,6 @@ with st.container(border=True):
             data=pdf_bytes,
             file_name=f"portfolio_report_{date.today().isoformat()}.pdf",
             mime="application/pdf",
-            width="stretch",
         )
     with dl_note:
         st.caption(
@@ -666,7 +672,7 @@ with tab_summary:
         if "Change vs Last Month (₹)" not in view_asset_summary.columns:
             st.caption("💡 Upload last month's CAS in the sidebar to see variance columns here.")
     with right:
-        st.plotly_chart(fig_pie, width="stretch")
+        st.plotly_chart(fig_pie, use_container_width=True)
 
     st.markdown("---")
     st.subheader("Breakdown by instrument type")
@@ -690,7 +696,7 @@ with tab_summary:
     ib_display = _with_total_row(ib_display, view_instrument_breakdown, ib_total_specs)
     st.dataframe(ib_display, hide_index=True, width="stretch")
 
-    st.plotly_chart(fig_ib, width="stretch")
+    st.plotly_chart(fig_ib, use_container_width=True)
 
 
 # --------------------------------------------------------------------------
@@ -1286,7 +1292,7 @@ with tab_trend:
     )
     if not data.valuation_trend.empty:
         if fig_trend:
-            st.plotly_chart(fig_trend, width="stretch")
+            st.plotly_chart(fig_trend, use_container_width=True)
         trend_display = data.valuation_trend.copy()
         trend_display["Portfolio Value (₹)"] = trend_display["Portfolio Value (₹)"].apply(fmt_inr)
         trend_display["Change (₹)"] = trend_display["Change (₹)"].apply(fmt_inr)
