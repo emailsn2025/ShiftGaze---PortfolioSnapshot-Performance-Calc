@@ -233,6 +233,12 @@ Don't want to re-upload everything tomorrow? Use the <b>Save Session Data</b> fe
     with col_up1:
         st.subheader("📄 Upload CAS PDFs")
         st.caption("Upload one per family member for a combined view.")
+        
+        # Display Success Message if CAS was just processed
+        if st.session_state.get("cas_success"):
+            st.success("✅ CAS data applied successfully!")
+            st.session_state["cas_success"] = False
+            
         uploaded_files = st.file_uploader(
             "Upload Current CAS PDF(s)", type=["pdf"], accept_multiple_files=True,
             key=f"cas_upload_{st.session_state.uploader_nonce['cas']}"
@@ -263,10 +269,16 @@ Don't want to re-upload everything tomorrow? Use the <b>Save Session Data</b> fe
             if st.button("Apply CAS Data"):
                 st.session_state.holder_to_data.update(result) 
                 st.session_state.uploader_nonce["cas"] += 1
+                st.session_state["cas_success"] = True
                 st.rerun()
 
         with st.expander("📅 Compare to last month (optional)"):
             st.caption("Upload last month's CAS to get variance columns in tables.")
+            
+            if st.session_state.get("prev_cas_success"):
+                st.success("✅ Previous CAS data applied successfully!")
+                st.session_state["prev_cas_success"] = False
+                
             prev_uploaded_files = st.file_uploader(
                 "Upload previous month's CAS PDF(s)", type=["pdf"], accept_multiple_files=True,
                 key=f"prev_cas_upload_{st.session_state.uploader_nonce['prev_cas']}"
@@ -280,12 +292,17 @@ Don't want to re-upload everything tomorrow? Use the <b>Save Session Data</b> fe
                         prev_h_to_d[parsed.holder_name or f"{f.name}_{i}"] = parsed
                 st.session_state.prev_holder_to_data.update(prev_h_to_d) 
                 st.session_state.uploader_nonce["prev_cas"] += 1
+                st.session_state["prev_cas_success"] = True
                 st.rerun()
 
     with col_up2:
         st.subheader("📥 Transaction Dropzone")
         st.caption("Drop any mix of Zerodha Tradebook, Kuvera, GLC, or Manual CSV files.")
         
+        if st.session_state.get("dropzone_success"):
+            st.success(st.session_state["dropzone_success"])
+            st.session_state["dropzone_success"] = False
+            
         if not st.session_state.holder_to_data:
             st.info("Please upload a CAS PDF first to map your transactions.")
         else:
@@ -359,6 +376,7 @@ Don't want to re-upload everything tomorrow? Use the <b>Save Session Data</b> fe
                     if errors: st.error("Some files failed:\n" + "\n".join(f"- {e}" for e in errors))
                     if imported:
                         st.session_state.uploader_nonce["dropzone"] += 1
+                        st.session_state["dropzone_success"] = f"✅ Successfully imported {imported} file(s)!"
                         st.rerun()
 
     st.markdown("---")
@@ -898,17 +916,24 @@ with tab_connect:
 
     with src_zerodha_csv:
         zt_holder = _holder_picker("zt_holder")
+        if st.session_state.get("zt_success"):
+            st.success("✅ Zerodha Tradebook imported successfully!")
+            st.session_state["zt_success"] = False
         zt_files = st.file_uploader("Upload Tradebook file(s)", type=["csv", "xlsx"], accept_multiple_files=True, key=f"zt_upload_{st.session_state.uploader_nonce['zt']}")
         if zt_files and st.button("Add to XIRR data", key="zt_add"):
             try:
                 parsed = parse_tradebook(zt_files)
                 parsed.insert(0, "Holder", zt_holder)
                 st.session_state.txn_sources["zerodha_tradebook"] = parsed
+                st.session_state["zt_success"] = True
                 st.rerun()
             except Exception as e: st.error(str(e))
 
     with src_kuvera:
         kv_holder = _holder_picker("kv_holder")
+        if st.session_state.get("kv_success"):
+            st.success("✅ Kuvera statement imported successfully!")
+            st.session_state["kv_success"] = False
         kv_file = st.file_uploader("Upload Kuvera statement", type=["xlsx", "csv"], key=f"kv_upload_{st.session_state.uploader_nonce['kv']}")
         if kv_file is not None:
             try:
@@ -918,11 +943,15 @@ with tab_connect:
                 st.dataframe(match_summary, hide_index=True)
                 if st.button("Add to XIRR data", key="kv_add"):
                     st.session_state.txn_sources["kuvera_statement"] = kv_txns
+                    st.session_state["kv_success"] = True
                     st.rerun()
             except Exception as e: st.error(f"Couldn't read that file: {e}")
 
     with src_glc:
         glc_holder = _holder_picker("glc_holder")
+        if st.session_state.get("glc_success"):
+            st.success("✅ GLC statement imported successfully!")
+            st.session_state["glc_success"] = False
         glc_file = st.file_uploader("Upload GLC Statement", type=["xls", "xlsx"], key=f"glc_upload_{st.session_state.uploader_nonce['glc']}")
         if glc_file is not None:
             try:
@@ -933,10 +962,14 @@ with tab_connect:
                 st.dataframe(glc_match_summary, hide_index=True)
                 if st.button("Add to XIRR data", key="glc_add"):
                     st.session_state.txn_sources["glc_pms"] = glc_txns
+                    st.session_state["glc_success"] = True
                     st.rerun()
             except Exception as e: st.error(f"Couldn't read that file: {e}")
 
     with src_manual:
+        if st.session_state.get("manual_success"):
+            st.success("✅ Manual CSV imported successfully!")
+            st.session_state["manual_success"] = False
         st.download_button("⬇️ Download template (CSV)", data=pd.DataFrame(columns=TXN_SCHEMA).to_csv(index=False).encode("utf-8"), file_name="transactions_template.csv", mime="text/csv")
         manual_file = st.file_uploader("Upload completed CSV", type=["csv"], key=f"manual_upload_{st.session_state.uploader_nonce['manual']}")
         if manual_file is not None:
@@ -946,5 +979,6 @@ with tab_connect:
                 if "Holder" not in manual_df.columns: manual_df["Holder"] = _holder_picker("manual_holder")
                 if st.button("Add to XIRR data", key="manual_add"):
                     st.session_state.txn_sources["manual"] = manual_df[TXN_SCHEMA]
+                    st.session_state["manual_success"] = True
                     st.rerun()
             except Exception as e: st.error(str(e))
