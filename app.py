@@ -967,18 +967,57 @@ with tab_connect:
             except Exception as e: st.error(f"Couldn't read that file: {e}")
 
     with src_manual:
+        st.markdown("For anything else - bank purchases, other brokers, funds outside Zerodha/Kuvera/GLC, or manual entry.")
+        
+        # Populated template with examples
+        template = pd.DataFrame(
+            {
+                "Date": ["2023-04-01", "2023-07-01"],
+                "AssetClass": ["Mutual Fund Folios", "Equity"],
+                "Identifier": ["INF209K01YN0", "INE021A01026"],
+                "Description": ["Bank SIP #1", "Direct share purchase"],
+                "Amount": [-50000, -25000],
+                "Holder": [family_holders[0], family_holders[0]],
+            }
+        )
+        
+        with st.expander("📋 CSV format reference (click to read rules & see example)"):
+            st.caption(
+                "**Rules for Manual CSV:**\n"
+                "1. **Amount:** Must be **negative** for investments (purchases/SIPs) and positive for redemptions/dividends.\n"
+                "2. **Identifier:** Must be the exact **ISIN** (e.g. INF... or INE...) matching your CAS PDF, NOT a ticker symbol.\n"
+                "3. **Holder:** Must exactly match the name assigned in the Settings tab.\n\n"
+                "*(You do not need to add a final 'current value' row - the app automatically pulls today's value from your CAS PDF!)*"
+            )
+            st.dataframe(template, hide_index=True, width="stretch")
+
         if st.session_state.get("manual_success"):
             st.success("✅ Manual CSV imported successfully!")
             st.session_state["manual_success"] = False
-        st.download_button("⬇️ Download template (CSV)", data=pd.DataFrame(columns=TXN_SCHEMA).to_csv(index=False).encode("utf-8"), file_name="transactions_template.csv", mime="text/csv")
+            
+        st.download_button(
+            "⬇️ Download template (CSV)", 
+            data=template.to_csv(index=False).encode("utf-8"), 
+            file_name="transactions_template.csv", 
+            mime="text/csv"
+        )
+        
         manual_file = st.file_uploader("Upload completed CSV", type=["csv"], key=f"manual_upload_{st.session_state.uploader_nonce['manual']}")
+        
         if manual_file is not None:
             try:
                 manual_df = pd.read_csv(manual_file)
-                manual_df["Date"] = pd.to_datetime(manual_df["Date"]).dt.date
-                if "Holder" not in manual_df.columns: manual_df["Holder"] = _holder_picker("manual_holder")
-                if st.button("Add to XIRR data", key="manual_add"):
-                    st.session_state.txn_sources["manual"] = manual_df[TXN_SCHEMA]
-                    st.session_state["manual_success"] = True
-                    st.rerun()
-            except Exception as e: st.error(str(e))
+                required = set(TXN_SCHEMA) - {"Holder"}
+                missing = required - set(manual_df.columns)
+                if missing:
+                    st.error(f"Missing column(s): {', '.join(missing)}")
+                else:
+                    manual_df["Date"] = pd.to_datetime(manual_df["Date"]).dt.date
+                    if "Holder" not in manual_df.columns: 
+                        manual_df["Holder"] = _holder_picker("manual_holder")
+                    if st.button("Add to XIRR data", key="manual_add"):
+                        st.session_state.txn_sources["manual"] = manual_df[TXN_SCHEMA]
+                        st.session_state["manual_success"] = True
+                        st.rerun()
+            except Exception as e: 
+                st.error(str(e))
