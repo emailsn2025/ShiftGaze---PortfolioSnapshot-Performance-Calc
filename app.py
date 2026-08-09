@@ -152,6 +152,66 @@ with st.sidebar.expander("📅 Compare to last month (optional)"):
     )
 
 st.sidebar.markdown("---")
+
+# --------------------------------------------------------------------------
+# Sidebar - Save / Resume Session JSON
+# --------------------------------------------------------------------------
+with st.sidebar.expander("💾 Save or resume session data"):
+    st.caption("Download your loaded transactions as a JSON, or upload a previous JSON here to restore data.")
+    
+    # Save Button
+    if st.session_state.txn_sources:
+        import json as _json
+        def _session_to_json() -> bytes:
+            fh = st.session_state.get('last_family_holders', [])
+            payload = {
+                "version": 1,
+                "exported_at": datetime.now().isoformat(),
+                "family_holders": fh,
+                "txn_sources": {
+                    key: df.assign(Date=df["Date"].astype(str)).to_dict(orient="records")
+                    for key, df in st.session_state.txn_sources.items()
+                },
+            }
+            return _json.dumps(payload, indent=2, default=str).encode("utf-8")
+
+        st.download_button(
+            "⬇️ Download session (JSON)",
+            data=_session_to_json(),
+            file_name=f"portfolio_session_{date.today().isoformat()}.json",
+            mime="application/json",
+        )
+    else:
+        st.caption("Nothing loaded yet to save.")
+        
+    st.markdown("---")
+    
+    # Resume Uploader
+    resume_file = st.sidebar.file_uploader(
+        "Upload a saved session JSON", type=["json"],
+        key=f"resume_upload_{st.session_state.uploader_nonce.get('resume', 0)}",
+    )
+    if resume_file is not None:
+        import json as _json
+        try:
+            payload = _json.loads(resume_file.getvalue().decode("utf-8"))
+            restored_count = 0
+            for key, records in payload.get("txn_sources", {}).items():
+                if not records:
+                    continue
+                df = pd.DataFrame(records)
+                df["Date"] = pd.to_datetime(df["Date"]).dt.date
+                st.session_state.txn_sources[key] = df
+                restored_count += 1
+            if restored_count:
+                st.session_state.uploader_nonce["resume"] = st.session_state.uploader_nonce.get("resume", 0) + 1
+                st.rerun()
+            else:
+                st.sidebar.warning("That file didn't have any transaction sources in it.")
+        except Exception as e:
+            st.sidebar.error(f"Couldn't read that session file: {e}")
+
+st.sidebar.markdown("---")
 st.sidebar.caption(
     "Get your CDSL CAS from **cdslindia.com** → \"Register for easi/easiest\" → e-CAS, "
     "or get an MF Central summary from **mfcentral.com** (mutual funds only, no demat "
@@ -213,6 +273,7 @@ if not holder_to_data:
 
 data = combine_family(holder_to_data)
 family_holders = list(holder_to_data.keys())
+st.session_state['last_family_holders'] = family_holders
 is_family = len(family_holders) > 1
 
 if data.total_value == 0:
@@ -295,6 +356,7 @@ if mf_total_invested:
 # --------------------------------------------------------------------------
 
 view_data, view_instrument_breakdown, view_asset_summary = data, instrument_breakdown, asset_summary_with_variance
+holder_view = "👪 All Family"
 if is_family:
     holder_view = st.radio(
         "Viewing", ["👪 All Family"] + family_holders, horizontal=True, key="holder_view_filter",
@@ -474,29 +536,79 @@ if txns is not None and not txns.empty:
 
 
 # --------------------------------------------------------------------------
+# Pre-build Charts for UI and Export
+# --------------------------------------------------------------------------
+# 1. Asset Class Pie Chart
+pie_df = view_data.asset_summary.copy()
+pie_df["Value (formatted)"] = pie_df["Value (₹)"].apply(fmt_inr)
+fig_pie = px.pie(pie_df, values="Value (₹)", names="Asset Class", hole=0.45, custom_data=["Value (formatted)"])
+fig_pie.update_traces(textinfo="percent+label", hovertemplate="%{label}<br>%{customdata[0]}<br>%{percent}<extra></extra>")
+fig_pie.update_layout(showlegend=False, margin=dict(t=10, b=10, l=10, r=10), height=350)
+
+# 2. Instrument Breakdown Bar Chart
+ib_sorted = view_instrument_breakdown.sort_values("Value (₹)")
+tick_vals = list(ib_sorted["Value (₹)"])
+fig_ib = px.bar(
+    ib_sorted, x="Value (₹)", y="Instrument Type", color="Asset Class", orientation="h",
+    text=ib_sorted["Value (₹)"].apply(fmt_inr_short),
+)
+fig_ib.update_traces(textposition="outside", cliponaxis=False)
+fig_ib.update_xaxes(tickvals=tick_vals, ticktext=[fmt_inr_short(v) for v in tick_vals], title="")
+fig_ib.update_layout(margin=dict(t=40, b=10, l=10, r=10), height=100 + 32 * len(ib_sorted), yaxis_title="", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
+
+# 3. 12-Month Trend Line Chart
+fig_trend = None
+if not data.valuation_trend.empty:
+    fig_trend = px.line(data.valuation_trend, x="Month", y="Portfolio Value (₹)", markers=True)
+    trend_ticks = list(data.valuation_trend["Portfolio Value (₹)"])
+    fig_trend.update_yaxes(tickvals=trend_ticks, ticktext=[fmt_inr_short(v) for v in trend_ticks], title="")
+    fig_trend.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=350)
+
+export_charts = [fig for fig in [fig_pie, fig_ib, fig_trend] if fig is not None]
+
+# --------------------------------------------------------------------------
 # Download everything - Excel workbook + PDF report, from whatever's loaded
 # --------------------------------------------------------------------------
+def _append_raw_total(df: pd.DataFrame, cols_to_sum: list[str], label: str = "Total") -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    totals = {col: "" for col in df.columns}
+    totals[df.columns[0]] = label
+    for col in cols_to_sum:
+        if col in df.columns:
+            totals[col] = df[col].sum()
+    return pd.concat([df, pd.DataFrame([totals])], ignore_index=True)
+
+# Format the correct Equity dataframe for export (checking for Zerodha Live data)
+export_equity = view_data.equity_holdings
+zh_export = st.session_state.zerodha_holdings
+if zh_export is not None and not zh_export.empty:
+    zh_view = zh_export.copy()
+    if is_family and holder_view != "👪 All Family":
+        zh_view = zh_view[zh_view["Holder"] == holder_view]
+    zh_view.insert(1, "Instrument Type", zh_view["Symbol"].apply(instrument_classifier.classify_equity))
+    export_equity = zh_view
+
+export_sections = {
+    "Asset Class Summary": _append_raw_total(view_asset_summary, ["Value (₹)", "Change vs Last Month (₹)"]),
+    "Instrument Type Breakdown": _append_raw_total(view_instrument_breakdown, ["Value (₹)", "Change vs Last Month (₹)"]),
+    "Mutual Funds": _append_raw_total(view_data.mf_folio_holdings, ["Invested (₹)", "Valuation (₹)", "Unrealised P/L (₹)"]),
+    "Equity": _append_raw_total(export_equity, ["Value (₹)", "Invested (₹)", "Current Value (₹)", "Unrealised P/L (₹)"]),
+    "MF Held in Demat": _append_raw_total(view_data.mf_in_demat_holdings, ["Value (₹)"]),
+    "Others (Govt Sec)": _append_raw_total(view_data.other_holdings, ["Value (₹)"]),
+    "12M Trend": view_data.valuation_trend, # Trend totals don't make numerical sense
+    "XIRR by Holding": _append_raw_total(xirr_by_holding_df, ["Current Value (₹)"]),
+    "XIRR by Asset Class": _append_raw_total(xirr_by_asset_class_df, ["Current Value (₹)"]),
+    "XIRR by Instrument Type": _append_raw_total(xirr_by_instrument_type_df, ["Current Value (₹)"]),
+    "XIRR by Family Member": _append_raw_total(xirr_by_holder_df, ["Current Value (₹)"]),
+}
 
 with st.container(border=True):
     dl_col1, dl_col2, dl_note = st.columns([1, 1, 3])
-
-    excel_sections = {
-        "Asset Class Summary": view_asset_summary,
-        "Instrument Type Breakdown": view_instrument_breakdown,
-        "Mutual Funds": view_data.mf_folio_holdings,
-        "Equity": view_data.equity_holdings,
-        "MF Held in Demat": view_data.mf_in_demat_holdings,
-        "Others (Govt Sec)": view_data.other_holdings,
-        "12M Trend": view_data.valuation_trend,
-        "XIRR by Holding": xirr_by_holding_df,
-        "XIRR by Asset Class": xirr_by_asset_class_df,
-        "XIRR by Instrument Type": xirr_by_instrument_type_df,
-        "XIRR by Family Member": xirr_by_holder_df,
-    }
     with dl_col1:
         st.download_button(
             "📊 Download all tables (Excel)",
-            data=report_export.build_excel(excel_sections),
+            data=report_export.build_excel(export_sections),
             file_name=f"portfolio_report_{date.today().isoformat()}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             width="stretch",
@@ -511,19 +623,8 @@ with st.container(border=True):
             title="Portfolio Summary Report" + (f" - {holder_view}" if is_family and holder_view != "👪 All Family" else ""),
             generated_note=f"Generated {date.today().isoformat()} from CAS data",
             summary_metrics=pdf_summary,
-            sections=[
-                ("Asset Class Summary", view_asset_summary),
-                ("Instrument Type Breakdown", view_instrument_breakdown),
-                ("Mutual Fund Holdings", view_data.mf_folio_holdings),
-                ("Equity Holdings", view_data.equity_holdings),
-                ("Mutual Funds Held in Demat Form", view_data.mf_in_demat_holdings),
-                ("Others (Government Securities / SGB)", view_data.other_holdings),
-                ("12-Month Portfolio Value Trend", view_data.valuation_trend),
-                ("XIRR by Holding", xirr_by_holding_df),
-                ("XIRR by Asset Class", xirr_by_asset_class_df),
-                ("XIRR by Instrument Type", xirr_by_instrument_type_df),
-                ("XIRR by Family Member", xirr_by_holder_df),
-            ],
+            sections=list(export_sections.items()),
+            charts=export_charts
         )
         st.download_button(
             "📄 Download PDF report",
@@ -538,7 +639,6 @@ with st.container(border=True):
             "breakdowns always, XIRR tables too once you've loaded transaction history in "
             "Connect & Import."
             + (" Matches your current **Viewing** selection above." if is_family else "")
-            + " The PDF is tables only (no charts), formatted for printing."
         )
 
 
@@ -566,18 +666,7 @@ with tab_summary:
         if "Change vs Last Month (₹)" not in view_asset_summary.columns:
             st.caption("💡 Upload last month's CAS in the sidebar to see variance columns here.")
     with right:
-        pie_df = view_data.asset_summary.copy()
-        pie_df["Value (formatted)"] = pie_df["Value (₹)"].apply(fmt_inr)
-        fig = px.pie(
-            pie_df, values="Value (₹)", names="Asset Class",
-            hole=0.45, custom_data=["Value (formatted)"],
-        )
-        fig.update_traces(
-            textinfo="percent+label",
-            hovertemplate="%{label}<br>%{customdata[0]}<br>%{percent}<extra></extra>",
-        )
-        fig.update_layout(showlegend=False, margin=dict(t=10, b=10, l=10, r=10), height=350)
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig_pie, width="stretch")
 
     st.markdown("---")
     st.subheader("Breakdown by instrument type")
@@ -601,23 +690,6 @@ with tab_summary:
     ib_display = _with_total_row(ib_display, view_instrument_breakdown, ib_total_specs)
     st.dataframe(ib_display, hide_index=True, width="stretch")
 
-    ib_sorted = view_instrument_breakdown.sort_values("Value (₹)")
-    tick_vals = list(ib_sorted["Value (₹)"])
-    fig_ib = px.bar(
-        ib_sorted,
-        x="Value (₹)", y="Instrument Type", color="Asset Class", orientation="h",
-        text=ib_sorted["Value (₹)"].apply(fmt_inr_short),
-    )
-    fig_ib.update_traces(textposition="outside", cliponaxis=False)
-    fig_ib.update_xaxes(
-        tickvals=tick_vals, ticktext=[fmt_inr_short(v) for v in tick_vals], title="",
-    )
-    fig_ib.update_layout(
-        margin=dict(t=40, b=10, l=10, r=10),
-        height=100 + 32 * len(ib_sorted),
-        yaxis_title="",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-    )
     st.plotly_chart(fig_ib, width="stretch")
 
 
@@ -1080,84 +1152,6 @@ with tab_xirr:
                     st.session_state.uploader_nonce["dropzone"] = st.session_state.uploader_nonce.get("dropzone", 0) + 1
                     st.rerun()
 
-    # ----------------------------------------------------------------
-    # Save / resume - download everything currently loaded (already
-    # matched to real ISINs where possible) as JSON, and load it back in
-    # a later session instead of re-uploading and re-matching every
-    # Kuvera/GLC/Zerodha file from scratch. Doesn't replace the CAS
-    # upload - that's the one thing you still bring fresh each session,
-    # since it's also how current values get looked up for XIRR.
-    # ----------------------------------------------------------------
-    with st.expander("💾 Save or resume your transaction data", expanded=False):
-        st.caption(
-            "Download everything currently loaded in Connect & Import (or the drop zone "
-            "above) as one JSON file. Upload it back here in a future session to skip "
-            "re-uploading and re-matching those files - you'll still need to upload your "
-            "CAS PDF(s) fresh each time, since that's also where current values come from."
-        )
-        if st.session_state.txn_sources:
-            total_loaded = sum(len(v) for v in st.session_state.txn_sources.values())
-            st.caption(f"✅ Currently loaded: {total_loaded} transactions across {len(st.session_state.txn_sources)} source(s).")
-        save_col, resume_col = st.columns(2)
-        with save_col:
-            if st.session_state.txn_sources:
-                import json as _json
-
-                def _session_to_json() -> bytes:
-                    payload = {
-                        "version": 1,
-                        "exported_at": datetime.now().isoformat(),
-                        "family_holders": family_holders,
-                        "txn_sources": {
-                            key: df.assign(Date=df["Date"].astype(str)).to_dict(orient="records")
-                            for key, df in st.session_state.txn_sources.items()
-                        },
-                    }
-                    return _json.dumps(payload, indent=2, default=str).encode("utf-8")
-
-                st.download_button(
-                    "⬇️ Download session (JSON)",
-                    data=_session_to_json(),
-                    file_name=f"portfolio_session_{date.today().isoformat()}.json",
-                    mime="application/json",
-                )
-            else:
-                st.caption("Nothing loaded yet to save.")
-        with resume_col:
-            resume_file = st.file_uploader(
-                "Upload a saved session JSON", type=["json"],
-                key=f"resume_upload_{st.session_state.uploader_nonce.get('resume', 0)}",
-            )
-            if resume_file is not None:
-                import json as _json
-
-                try:
-                    payload = _json.loads(resume_file.getvalue().decode("utf-8"))
-                    restored_holders = set(payload.get("family_holders", []))
-                    if restored_holders and not restored_holders.issubset(set(family_holders)):
-                        missing = restored_holders - set(family_holders)
-                        st.warning(
-                            f"⚠️ This session was saved with holder(s) not in your currently "
-                            f"loaded CAS: {', '.join(missing)}. Their transactions will still "
-                            "import, but won't find a current value for XIRR until you upload "
-                            "the matching CAS file(s) too."
-                        )
-                    restored_count = 0
-                    for key, records in payload.get("txn_sources", {}).items():
-                        if not records:
-                            continue
-                        df = pd.DataFrame(records)
-                        df["Date"] = pd.to_datetime(df["Date"]).dt.date
-                        st.session_state.txn_sources[key] = df
-                        restored_count += 1
-                    if restored_count:
-                        st.session_state.uploader_nonce["resume"] = st.session_state.uploader_nonce.get("resume", 0) + 1
-                        st.rerun()
-                    else:
-                        st.warning("That file didn't have any transaction sources in it.")
-                except Exception as e:
-                    st.error(f"Couldn't read that session file: {e}")
-
     if txns is None or txns.empty:
         st.info("Nothing loaded yet - head to the **Connect & Import** tab to bring in transaction history.")
     else:
@@ -1280,7 +1274,7 @@ with tab_xirr:
 
 
 # --------------------------------------------------------------------------
-# Tab 4: 12-month trend (context only - explicitly NOT presented as XIRR)
+# Tab 5: 12-month trend (context only - explicitly NOT presented as XIRR)
 # --------------------------------------------------------------------------
 
 with tab_trend:
@@ -1291,11 +1285,8 @@ with tab_trend:
         "return figure."
     )
     if not data.valuation_trend.empty:
-        fig2 = px.line(data.valuation_trend, x="Month", y="Portfolio Value (₹)", markers=True)
-        trend_ticks = list(data.valuation_trend["Portfolio Value (₹)"])
-        fig2.update_yaxes(tickvals=trend_ticks, ticktext=[fmt_inr_short(v) for v in trend_ticks], title="")
-        fig2.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=350)
-        st.plotly_chart(fig2, width="stretch")
+        if fig_trend:
+            st.plotly_chart(fig_trend, width="stretch")
         trend_display = data.valuation_trend.copy()
         trend_display["Portfolio Value (₹)"] = trend_display["Portfolio Value (₹)"].apply(fmt_inr)
         trend_display["Change (₹)"] = trend_display["Change (₹)"].apply(fmt_inr)
