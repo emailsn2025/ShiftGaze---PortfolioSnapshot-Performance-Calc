@@ -6,10 +6,7 @@ Builds the two "download everything" artifacts the app offers:
     (skips sheets for data that isn't loaded, e.g. XIRR tables when no
     transaction history has been imported yet).
   - build_pdf(): a single print-friendly PDF - summary metrics up top, then
-    every table in its own section. Tables only (no charts) - kept
-    dependency-light and reliable rather than pulling in a headless-browser
-    or chart-rasterising toolchain for a report that's meant to be read as
-    numbers, not visuals.
+    every table in its own section.
 
 Both take the same shape of input: a dict of {sheet/section title: DataFrame},
 so app.py decides what's included based on what's actually loaded, and this
@@ -29,7 +26,7 @@ from reportlab.lib.units import cm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (
-    SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak,
+    SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, Image
 )
 
 # Bundled in the repo (assets/) rather than relying on system fonts, since a
@@ -157,23 +154,50 @@ def _fmt_cell(v, is_rupee_col: bool = False) -> str:
 
 
 def _df_to_table(df: pd.DataFrame, max_cols_before_landscape_needed: int = 6) -> Table:
-    header = [_sanitize(str(c)) for c in df.columns]
+    styles = getSampleStyleSheet()
+    cell_style = ParagraphStyle(
+        "Cell", parent=styles["Normal"], fontName=_FONT_REGULAR, fontSize=7, leading=9
+    )
+    header_style = ParagraphStyle(
+        "Header", parent=styles["Normal"], fontName=_FONT_BOLD, fontSize=7, textColor=colors.white, leading=9
+    )
+
+    # Calculate proportional column widths (A4 landscape width without margins is ~770)
+    col_lens = []
+    for c in df.columns:
+        max_val_len = df[c].astype(str).str.len().max()
+        if pd.isna(max_val_len): max_val_len = 0
+        col_lens.append(max(len(str(c)), max_val_len))
+    
+    tot = sum(col_lens)
+    col_widths = [max((l / tot) * 770, 30) for l in col_lens] # Ensure minimum width
+    
+    # Re-normalize to exactly 770
+    adj_tot = sum(col_widths)
+    col_widths = [(w / adj_tot) * 770 for w in col_widths]
+
+    header = [Paragraph(_sanitize(str(c)), header_style) for c in df.columns]
     rupee_cols = [_is_rupee_col(c) for c in df.columns]
-    rows = [[_fmt_cell(v, rupee_cols[i]) for i, v in enumerate(row)] for row in df.itertuples(index=False)]
+    
+    rows = []
+    for row in df.itertuples(index=False):
+        row_data = []
+        for i, v in enumerate(row):
+            text = _fmt_cell(v, rupee_cols[i])
+            row_data.append(Paragraph(text, cell_style))
+        rows.append(row_data)
+        
     data = [header] + rows
-    table = Table(data, repeatRows=1)
+    table = Table(data, repeatRows=1, colWidths=col_widths)
+    
     style = TableStyle(
         [
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2E86AB")),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("FONTNAME", (0, 0), (-1, 0), _FONT_BOLD),
-            ("FONTNAME", (0, 1), (-1, -1), _FONT_REGULAR),
-            ("FONTSIZE", (0, 0), (-1, -1), 7),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
             ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CCCCCC")),
             ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F5F7FA")]),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("TOPPADDING", (0, 0), (-1, -1), 3),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ]
     )
     table.setStyle(style)
@@ -185,11 +209,12 @@ def build_pdf(
     generated_note: str,
     summary_metrics: dict[str, str],
     sections: list[tuple[str, pd.DataFrame]],
+    charts: list = None
 ) -> bytes:
     """
     summary_metrics: label -> formatted value, shown as a small table up top.
-    sections: ordered list of (heading, DataFrame) - one table per section,
-    each starting on its own page so wide tables have room to breathe.
+    sections: ordered list of (heading, DataFrame) - one table per section.
+    charts: optional list of Plotly figures to render in the document.
     """
     _ensure_fonts()
     buf = BytesIO()
@@ -227,6 +252,20 @@ def build_pdf(
             "symbol is shown as 'Rs.' in this PDF. See the app's README for how to fix this.",
             note_style,
         ))
+        story.append(Spacer(1, 10))
+        
+    if charts:
+        story.append(Paragraph("Portfolio Charts", heading_style))
+        for fig in charts:
+            try:
+                # Render the Plotly chart as a static PNG using Kaleido
+                img_bytes = fig.to_image(format="png", engine="kaleido", width=800, height=350)
+                # Scale the image slightly to fit nicely on the A4 page
+                img = Image(BytesIO(img_bytes), width=800 * 0.65, height=350 * 0.65)
+                story.append(img)
+                story.append(Spacer(1, 15))
+            except Exception as e:
+                story.append(Paragraph(f"Could not render chart: {e}", note_style))
         story.append(Spacer(1, 10))
 
     first = True
