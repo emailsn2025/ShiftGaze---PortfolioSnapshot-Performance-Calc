@@ -534,9 +534,10 @@ if not data.valuation_trend.empty:
     fig_trend.update_yaxes(tickvals=ticks, ticktext=[fmt_inr_short(v) for v in ticks], title="Portfolio Value (₹)")
     fig_trend.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=350)
 
-# 4. Bubble Chart
+# 4. Bubble Chart (Pre-generated for PDF export using Asset Class)
 fig_bubble_export = None
-if not xirr_by_asset_class_df.empty:
+# SAFE CHECK: Ensure dataframe and column exist
+if not xirr_by_asset_class_df.empty and "XIRR (%)" in xirr_by_asset_class_df.columns:
     chart_df_exp = xirr_by_asset_class_df.dropna(subset=["XIRR (%)"]).copy()
     if not chart_df_exp.empty:
         chart_df_exp["Current Value"] = chart_df_exp["Current Value (₹)"].apply(fmt_inr)
