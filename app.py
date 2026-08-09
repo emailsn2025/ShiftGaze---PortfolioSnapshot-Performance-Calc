@@ -1163,6 +1163,64 @@ with tab_xirr:
     else:
         st.caption(f"Using {len(txns)} transactions from: {', '.join(st.session_state.txn_sources.keys())}.")
 
+        # ---- Coverage: how much of the portfolio actually has transaction
+        # history, vs just sitting in the CAS with none loaded. The XIRR
+        # tables below can only total the covered portion - this is why
+        # that total won't match the Asset Class Summary tab's total, and
+        # says so explicitly rather than leaving it to be noticed.
+        _covered_pairs = set(
+            txns[["Holder", "Identifier"]].drop_duplicates().itertuples(index=False, name=None)
+        )
+        _holding_specs = [
+            (data.mf_folio_holdings, "Valuation (₹)", "Scheme", "Mutual Fund Folios"),
+            (data.equity_holdings, "Value (₹)", "Security", "Equity"),
+            (data.mf_in_demat_holdings, "Value (₹)", "Security", "Mutual Funds Held in Demat Form"),
+            (data.other_holdings, "Value (₹)", "Security", "Others"),
+        ]
+        _uncovered_rows = []
+        _covered_value = 0.0
+        for _tbl, _val_col, _name_col, _asset_class in _holding_specs:
+            if _tbl.empty:
+                continue
+            _grouped = _tbl.groupby(["Holder", "ISIN"], as_index=False).agg({_val_col: "sum", _name_col: "first"})
+            for _, r in _grouped.iterrows():
+                pair = (r["Holder"], r["ISIN"])
+                if pair in _covered_pairs:
+                    _covered_value += r[_val_col]
+                else:
+                    _uncovered_rows.append(
+                        {"Holder": r["Holder"], "Asset Class": _asset_class, "Description": r[_name_col], "Value (₹)": r[_val_col]}
+                    )
+        _uncovered_df = pd.DataFrame(_uncovered_rows).sort_values("Value (₹)", ascending=False).reset_index(drop=True) if _uncovered_rows else pd.DataFrame()
+        _uncovered_total = _uncovered_df["Value (₹)"].sum() if not _uncovered_df.empty else 0.0
+        _coverage_pct = (_covered_value / data.total_value * 100) if data.total_value else 0.0
+
+        cov_col1, cov_col2 = st.columns([1, 3])
+        with cov_col1:
+            st.metric(
+                "XIRR coverage", f"{_coverage_pct:.1f}%",
+                help="Share of your total portfolio value (across all holders) that has transaction "
+                     "history loaded and so gets a real XIRR below. This is why the Total in these "
+                     "tables won't match the Asset Class Summary tab's total unless coverage is 100%.",
+            )
+        with cov_col2:
+            if _uncovered_total > 0:
+                st.caption(
+                    f"**{fmt_inr(_uncovered_total)}** of your portfolio has no transaction history "
+                    "loaded, so it isn't reflected in any table below. Usually either a holding type "
+                    "no importer covers yet (e.g. Sovereign Gold Bonds), or shares/funds bought "
+                    "outside the date range of whatever you've uploaded."
+                )
+                with st.expander(f"Show the {len(_uncovered_df)} uncovered holding(s)"):
+                    _unc_display = _uncovered_df.copy()
+                    _unc_display["Value (₹)"] = _unc_display["Value (₹)"].apply(fmt_inr)
+                    _unc_display = _with_total_row(_unc_display, _uncovered_df, {"Value (₹)": fmt_inr})
+                    st.dataframe(_unc_display, hide_index=True, width="stretch")
+            else:
+                st.caption("Every holding in your portfolio has transaction history loaded - full coverage.")
+
+        st.markdown("---")
+
         def _fmt_xirr_table(df: pd.DataFrame) -> pd.DataFrame:
             out = df.copy()
             out["Current Value (₹)"] = out["Current Value (₹)"].apply(fmt_inr)
