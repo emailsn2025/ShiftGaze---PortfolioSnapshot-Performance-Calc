@@ -33,6 +33,16 @@ import instrument_classifier
 
 st.set_page_config(page_title="Portfolio Summary & XIRR Tracker", page_icon="📊", layout="wide")
 
+# Custom CSS to double the font size of the Tab Headers
+st.markdown("""
+<style>
+.stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p {
+    font-size: 1.6rem !important; 
+    font-weight: 600 !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 # --------------------------------------------------------------------------
 # State Initialization
 # --------------------------------------------------------------------------
@@ -188,11 +198,11 @@ tab_settings, tab_summary, tab_holdings, tab_xirr, tab_trend, tab_connect = st.t
     "3. 🔍 Holdings Detail",
     "4. 📈 XIRR",
     "5. 🕒 12-Month Trend",
-    "6. 🔗 Connect & Import"
+    "6. 🔗 Connections"
 ])
 
 # --------------------------------------------------------------------------
-# 1. ⚙️ Settings (Data Upload & Management)
+# 1. ⚙️ Settings (Uploads & Downloads Management)
 # --------------------------------------------------------------------------
 with tab_settings:
     st.markdown("""
@@ -208,19 +218,21 @@ Upload your CDSL CAS (Consolidated Account Statement) or MF Central summary dire
 <br/><br/><b style="color:#93c5fd;">Step 2 — Review your Holdings</b><br/>
 Navigate to the <b>Asset Class Summary</b> and <b>Holdings Detail</b> tabs to see cleanly organized, tabular breakdowns of everything you currently own.
 <br/><br/><b style="color:#93c5fd;">Step 3 — Import Transactions for Real XIRR</b><br/>
-Your CAS alone only shows current values. To calculate an accurate, annualized <b>XIRR</b>, the app needs your purchase and redemption history. Navigate to the <b>Connect & Import</b> tab to securely import your tradebook from Zerodha, Kuvera, GLC, or a manual CSV.
-<br/><br/><b style="color:#93c5fd;">Step 4 — Save your Session</b><br/>
-Don't want to re-upload everything tomorrow? Once your PDFs and transactions are loaded, use the <b>Save Session Data</b> button below to download a secure, offline JSON file. Next time, just drop that JSON right back into the uploader below to instantly restore your entire dashboard!
+Your CAS alone only shows current values. To calculate an accurate, annualized <b>XIRR</b>, the app needs your purchase and redemption history. Use the Transaction Dropzone below (or the Connections tab) to securely import your tradebook from Zerodha, Kuvera, GLC, or a manual CSV.
+<br/><br/><b style="color:#93c5fd;">Step 4 — Save your Session & Export Reports</b><br/>
+Don't want to re-upload everything tomorrow? Use the <b>Save Session Data</b> feature to download a secure, offline JSON file. Next time, just drop that JSON right back into the uploader to instantly restore your entire dashboard! You can also download clean PDF and Excel summaries of your portfolio.
 </div>
 </details>
 </div>
 """, unsafe_allow_html=True)
-    
+
+    # ------------------ UPLOADS SECTION ------------------
+    st.header("📤 Uploads")
     col_up1, col_up2 = st.columns(2)
     
     with col_up1:
         st.subheader("📄 Upload CAS PDFs")
-        st.caption("Upload one per family member for a combined view, or just one for yourself.")
+        st.caption("Upload one per family member for a combined view.")
         uploaded_files = st.file_uploader(
             "Upload Current CAS PDF(s)", type=["pdf"], accept_multiple_files=True,
             key=f"cas_upload_{st.session_state.uploader_nonce['cas']}"
@@ -229,7 +241,6 @@ Don't want to re-upload everything tomorrow? Once your PDFs and transactions are
         # Confirm names immediately if files uploaded
         if uploaded_files:
             result = {}
-            # Base the 'seen' set on the current session memory to avoid duplicate labels
             seen = set(st.session_state.holder_to_data.keys()) 
             st.markdown("**Confirm who's who:**")
             for i, f in enumerate(uploaded_files):
@@ -250,13 +261,12 @@ Don't want to re-upload everything tomorrow? Once your PDFs and transactions are
                 result[label] = parsed
             
             if st.button("Apply CAS Data"):
-                # UPDATE merges the new records instead of overwriting the dictionary
                 st.session_state.holder_to_data.update(result) 
                 st.session_state.uploader_nonce["cas"] += 1
                 st.rerun()
 
         with st.expander("📅 Compare to last month (optional)"):
-            st.caption("Upload last month's CAS to get real variance columns (Change vs Last Month) in your breakdown tables.")
+            st.caption("Upload last month's CAS to get variance columns in tables.")
             prev_uploaded_files = st.file_uploader(
                 "Upload previous month's CAS PDF(s)", type=["pdf"], accept_multiple_files=True,
                 key=f"prev_cas_upload_{st.session_state.uploader_nonce['prev_cas']}"
@@ -268,16 +278,99 @@ Don't want to re-upload everything tomorrow? Once your PDFs and transactions are
                         parsed = load_cas(f.getvalue())
                     if parsed.total_value > 0:
                         prev_h_to_d[parsed.holder_name or f"{f.name}_{i}"] = parsed
-                # UPDATE merges previous files without overwriting
                 st.session_state.prev_holder_to_data.update(prev_h_to_d) 
                 st.session_state.uploader_nonce["prev_cas"] += 1
                 st.rerun()
 
     with col_up2:
-        st.subheader("💾 Save / Resume Session")
+        st.subheader("📥 Transaction Dropzone")
+        st.caption("Drop any mix of Zerodha Tradebook, Kuvera, GLC, or Manual CSV files.")
+        
+        if not st.session_state.holder_to_data:
+            st.info("Please upload a CAS PDF first to map your transactions.")
+        else:
+            dropzone_family_holders = list(st.session_state.holder_to_data.keys())
+            dropzone_is_family = len(dropzone_family_holders) > 1
+            
+            dropped_files = st.file_uploader(
+                "Drop files", type=["csv", "xlsx", "xls"], accept_multiple_files=True,
+                key=f"dropzone_{st.session_state.uploader_nonce.get('dropzone', 0)}",
+                label_visibility="collapsed",
+            )
+
+            if dropped_files:
+                detections = []
+                for f in dropped_files:
+                    fbytes = f.getvalue()
+                    fname = f.name
+                    if glc_parser.looks_like_glc(fbytes): dtype = "GLC (PMS)"
+                    elif zerodha_tradebook.looks_like_tradebook(fbytes, fname): dtype = "Zerodha Tradebook"
+                    elif kuvera_import.looks_like_kuvera(fbytes, fname): dtype = "Kuvera"
+                    else:
+                        try:
+                            _peek = pd.read_csv(BytesIO(fbytes), nrows=1) if fname.lower().endswith(".csv") else pd.read_excel(BytesIO(fbytes), nrows=1)
+                            _peek_cols = set(c.strip() for c in _peek.columns)
+                        except: _peek_cols = set()
+                        dtype = "Manual CSV" if {"Date", "AssetClass", "Identifier", "Amount"}.issubset(_peek_cols) else "Unrecognized"
+                    detections.append({"file": f, "fname": fname, "fbytes": fbytes, "dtype": dtype})
+
+                st.markdown("**Detected:**")
+                holder_choices = {}
+                for i, d in enumerate(detections):
+                    cols = st.columns([3, 2, 3]) if dropzone_is_family else st.columns([3, 2])
+                    cols[0].write(d["fname"])
+                    if d["dtype"] == "Unrecognized": cols[1].markdown("⚠️ *unrecognized*")
+                    else: cols[1].write(d["dtype"])
+                    if dropzone_is_family and d["dtype"] not in ("Unrecognized", "Manual CSV"): 
+                        holder_choices[i] = cols[2].selectbox("Holder", dropzone_family_holders, key=f"dropzone_holder_{i}", label_visibility="collapsed")
+                    elif dropzone_is_family: holder_choices[i] = None
+
+                n_ready = sum(1 for d in detections if d["dtype"] != "Unrecognized")
+                if any(d["dtype"] == "Unrecognized" for d in detections):
+                    st.caption("⚠️ Unrecognized file(s) shown above won't be imported here - check Connections tab.")
+
+                if n_ready and st.button(f"Import {n_ready} file(s)", key="dropzone_import"):
+                    imported, errors = 0, []
+                    for i, d in enumerate(detections):
+                        if d["dtype"] == "Unrecognized": continue
+                        holder = holder_choices.get(i) if dropzone_is_family else dropzone_family_holders[0]
+                        key = f"dropzone_{d['fname']}"
+                        try:
+                            if d["dtype"] == "GLC (PMS)":
+                                hd = st.session_state.holder_to_data[holder]
+                                parsed, _ = glc_parser.parse_glc_statement(d["fbytes"], hd.equity_holdings, hd.mf_folio_holdings, hd.mf_in_demat_holdings)
+                                parsed.insert(0, "Holder", holder)
+                            elif d["dtype"] == "Zerodha Tradebook":
+                                parsed = zerodha_tradebook.parse_tradebook([d["file"]])
+                                parsed.insert(0, "Holder", holder)
+                            elif d["dtype"] == "Kuvera":
+                                hd = st.session_state.holder_to_data[holder]
+                                records = kuvera_import.load_statement(d["file"])
+                                parsed, _ = kuvera_import.build_transactions(records, hd.mf_folio_holdings)
+                                parsed.insert(0, "Holder", holder)
+                            else:
+                                parsed = pd.read_csv(BytesIO(d["fbytes"])).rename(columns=lambda c: str(c).strip())
+                                parsed["Date"] = pd.to_datetime(parsed["Date"]).dt.date
+                                if "Holder" not in parsed.columns: parsed["Holder"] = dropzone_family_holders[0]
+                                parsed = parsed[TXN_SCHEMA]
+                            st.session_state.txn_sources[key] = parsed
+                            imported += 1
+                        except Exception as e: errors.append(f"{d['fname']}: {e}")
+                    if errors: st.error("Some files failed:\n" + "\n".join(f"- {e}" for e in errors))
+                    if imported:
+                        st.session_state.uploader_nonce["dropzone"] += 1
+                        st.rerun()
+
+    st.markdown("---")
+    
+    # ------------------ DOWNLOADS SECTION ------------------
+    st.header("📥 Downloads & Session Management")
+    col_dl1, col_dl2 = st.columns(2)
+
+    with col_dl1:
+        st.subheader("💾 Save / Resume Session JSON")
         st.caption("Download your loaded CAS data and transactions, or upload a JSON to instantly restore your dashboard.")
         
-        # Save Button
         if st.session_state.holder_to_data or st.session_state.txn_sources:
             import json as _json
             def _session_to_json() -> bytes:
@@ -305,7 +398,6 @@ Don't want to re-upload everything tomorrow? Once your PDFs and transactions are
         else:
             st.info("No data loaded yet to save.")
             
-        # Display visual success message
         if st.session_state.get("show_json_success"):
             st.success("✅ Session data restored successfully!")
             st.session_state["show_json_success"] = False
@@ -313,6 +405,7 @@ Don't want to re-upload everything tomorrow? Once your PDFs and transactions are
         resume_file = st.file_uploader(
             "Upload a saved session JSON", type=["json"],
             key=f"resume_upload_{st.session_state.uploader_nonce.get('resume', 0)}",
+            label_visibility="collapsed"
         )
         
         if resume_file is not None:
@@ -348,16 +441,22 @@ Don't want to re-upload everything tomorrow? Once your PDFs and transactions are
             except Exception as e:
                 st.error(f"Couldn't read that session file: {e}")
                 
-        if st.session_state.holder_to_data or st.session_state.txn_sources:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("🗑️ Clear all loaded data", use_container_width=True):
-                st.session_state.holder_to_data = {}
-                st.session_state.prev_holder_to_data = {}
-                st.session_state.txn_sources = {}
-                st.session_state.zerodha_holdings = None
-                for k in st.session_state.uploader_nonce:
-                    st.session_state.uploader_nonce[k] += 1
-                st.rerun()
+    with col_dl2:
+        st.subheader("📄 Export Reports")
+        st.caption("Download clean PDF and Excel summaries of your currently viewed portfolio and XIRR data.")
+        # We create a placeholder here. The buttons will be injected below once the data is processed.
+        report_downloads_container = st.container()
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.session_state.holder_to_data or st.session_state.txn_sources:
+        if st.button("🗑️ Clear all loaded data", use_container_width=True):
+            st.session_state.holder_to_data = {}
+            st.session_state.prev_holder_to_data = {}
+            st.session_state.txn_sources = {}
+            st.session_state.zerodha_holdings = None
+            for k in st.session_state.uploader_nonce:
+                st.session_state.uploader_nonce[k] += 1
+            st.rerun()
 
 
 # --------------------------------------------------------------------------
@@ -544,7 +643,7 @@ if not xirr_by_asset_class_df.empty and "XIRR (%)" in xirr_by_asset_class_df.col
 export_charts = [fig for fig in [fig_pie, fig_ib, fig_trend, fig_bubble_export] if fig is not None]
 
 # --------------------------------------------------------------------------
-# PDF/Excel Exports
+# PDF/Excel Exports (Injected back into Settings Tab placeholder)
 # --------------------------------------------------------------------------
 def _append_raw_total(df: pd.DataFrame, cols_to_sum: list, label: str = "Total") -> pd.DataFrame:
     if df is None or df.empty: return df
@@ -576,11 +675,17 @@ export_sections = {
     "XIRR by Family Member": _append_raw_total(xirr_by_holder_df, ["Current Value (₹)"]),
 }
 
-with st.container(border=True):
-    dl_col1, dl_col2, dl_note = st.columns([1, 1, 3])
-    with dl_col1:
-        st.download_button("📊 Download all tables (Excel)", data=report_export.build_excel(export_sections), file_name=f"portfolio_report_{date.today().isoformat()}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    with dl_col2:
+with report_downloads_container:
+    dl_colA, dl_colB = st.columns(2)
+    with dl_colA:
+        st.download_button(
+            "📊 Download all tables (Excel)", 
+            data=report_export.build_excel(export_sections), 
+            file_name=f"portfolio_report_{date.today().isoformat()}.xlsx", 
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
+    with dl_colB:
         pdf_summary = {"Total Portfolio Value": fmt_inr(view_data.total_value)}
         if not xirr_by_asset_class_df.empty and "XIRR (%)" in xirr_by_asset_class_df.columns:
             for _, r in xirr_by_asset_class_df.iterrows():
@@ -590,9 +695,13 @@ with st.container(border=True):
             generated_note=f"Generated {date.today().isoformat()} from CAS data",
             summary_metrics=pdf_summary, sections=list(export_sections.items()), charts=export_charts
         )
-        st.download_button("📄 Download PDF report", data=pdf_bytes, file_name=f"portfolio_report_{date.today().isoformat()}.pdf", mime="application/pdf")
-    with dl_note: st.caption("Both include every table currently loaded. Matches your current **Viewing** selection above.")
-
+        st.download_button(
+            "📄 Download PDF report", 
+            data=pdf_bytes, 
+            file_name=f"portfolio_report_{date.today().isoformat()}.pdf", 
+            mime="application/pdf",
+            use_container_width=True
+        )
 
 # --------------------------------------------------------------------------
 # Tab 2: Asset Class Summary
@@ -698,11 +807,11 @@ with tab_xirr:
     }[chart_level]
     
     if chart_source.empty or "XIRR (%)" not in chart_source.columns:
-        st.info("No solvable XIRR values yet to plot. Please upload transactions via Connect & Import.")
+        st.info("No solvable XIRR values yet to plot. Please upload transactions in the Settings or Connections tab.")
     else:
         chart_df = chart_source.dropna(subset=["XIRR (%)"]).copy()
         if chart_df.empty:
-            st.info("No solvable XIRR values yet to plot. Please upload transactions via Connect & Import.")
+            st.info("No solvable XIRR values yet to plot. Please upload transactions in the Settings or Connections tab.")
         else:
             chart_df["Current Value"] = chart_df["Current Value (₹)"].apply(fmt_inr)
             use_color_map = ASSET_COLORS if chart_level == "Asset Class" else None
@@ -757,77 +866,15 @@ with tab_trend:
 
 
 # --------------------------------------------------------------------------
-# Tab 6: Connect & Import 
+# Tab 6: Connections 
 # --------------------------------------------------------------------------
 with tab_connect:
-    st.write("Real XIRR needs dated cash flows. Bring them in from any combination of the sources below.")
+    st.write("Connect live accounts or upload specific transaction files below. *(Note: You can also drag and drop transaction files directly in the Settings tab!)*")
     if is_family: st.caption(f"👪 Family mode - Each source asks which family member it belongs to.")
 
     def _holder_picker(key: str) -> str:
         if not is_family: return family_holders[0]
         return st.selectbox("Which family member is this for?", family_holders, key=key)
-
-    with st.expander("📥 Drop all your transaction files here (auto-detected)", expanded=not bool(st.session_state.txn_sources)):
-        st.caption("Drop any mix of Zerodha Tradebook, Kuvera, GLC, or Manual CSV files at once.")
-        dropped_files = st.file_uploader("Drop files", type=["csv", "xlsx", "xls"], accept_multiple_files=True, key=f"dropzone_{st.session_state.uploader_nonce.get('dropzone', 0)}", label_visibility="collapsed")
-        if dropped_files:
-            detections = []
-            for f in dropped_files:
-                fbytes = f.getvalue()
-                fname = f.name
-                if glc_parser.looks_like_glc(fbytes): dtype = "GLC (PMS)"
-                elif zerodha_tradebook.looks_like_tradebook(fbytes, fname): dtype = "Zerodha Tradebook"
-                elif kuvera_import.looks_like_kuvera(fbytes, fname): dtype = "Kuvera"
-                else:
-                    try:
-                        _peek = pd.read_csv(BytesIO(fbytes), nrows=1) if fname.lower().endswith(".csv") else pd.read_excel(BytesIO(fbytes), nrows=1)
-                        _peek_cols = set(c.strip() for c in _peek.columns)
-                    except: _peek_cols = set()
-                    dtype = "Manual CSV" if {"Date", "AssetClass", "Identifier", "Amount"}.issubset(_peek_cols) else "Unrecognized"
-                detections.append({"file": f, "fname": fname, "fbytes": fbytes, "dtype": dtype})
-
-            st.markdown("**Detected:**")
-            holder_choices = {}
-            for i, d in enumerate(detections):
-                cols = st.columns([3, 2, 3]) if is_family else st.columns([3, 2])
-                cols[0].write(d["fname"])
-                if d["dtype"] == "Unrecognized": cols[1].markdown("⚠️ *unrecognized*")
-                else: cols[1].write(d["dtype"])
-                if is_family and d["dtype"] not in ("Unrecognized", "Manual CSV"): holder_choices[i] = cols[2].selectbox("Holder", family_holders, key=f"dropzone_holder_{i}", label_visibility="collapsed")
-                elif is_family: holder_choices[i] = None
-
-            n_ready = sum(1 for d in detections if d["dtype"] != "Unrecognized")
-            if n_ready and st.button(f"Import {n_ready} file(s)", key="dropzone_import"):
-                imported, errors = 0, []
-                for i, d in enumerate(detections):
-                    if d["dtype"] == "Unrecognized": continue
-                    holder = holder_choices.get(i) if is_family else family_holders[0]
-                    key = f"dropzone_{d['fname']}"
-                    try:
-                        if d["dtype"] == "GLC (PMS)":
-                            hd = holder_to_data[holder]
-                            parsed, _ = glc_parser.parse_glc_statement(d["fbytes"], hd.equity_holdings, hd.mf_folio_holdings, hd.mf_in_demat_holdings)
-                            parsed.insert(0, "Holder", holder)
-                        elif d["dtype"] == "Zerodha Tradebook":
-                            parsed = zerodha_tradebook.parse_tradebook([d["file"]])
-                            parsed.insert(0, "Holder", holder)
-                        elif d["dtype"] == "Kuvera":
-                            hd = holder_to_data[holder]
-                            records = kuvera_import.load_statement(d["file"])
-                            parsed, _ = kuvera_import.build_transactions(records, hd.mf_folio_holdings)
-                            parsed.insert(0, "Holder", holder)
-                        else:
-                            parsed = pd.read_csv(BytesIO(d["fbytes"])).rename(columns=lambda c: str(c).strip())
-                            parsed["Date"] = pd.to_datetime(parsed["Date"]).dt.date
-                            if "Holder" not in parsed.columns: parsed["Holder"] = family_holders[0]
-                            parsed = parsed[TXN_SCHEMA]
-                        st.session_state.txn_sources[key] = parsed
-                        imported += 1
-                    except Exception as e: errors.append(f"{d['fname']}: {e}")
-                if errors: st.error("Some files failed:\n" + "\n".join(f"- {e}" for e in errors))
-                if imported:
-                    st.session_state.uploader_nonce["dropzone"] += 1
-                    st.rerun()
 
     src_zerodha_live, src_zerodha_csv, src_kuvera, src_glc, src_manual = st.tabs(["Zerodha (live)", "Zerodha (Tradebook CSV)", "Kuvera (statement)", "GLC (PMS)", "Manual CSV"])
 
@@ -859,11 +906,6 @@ with tab_connect:
                 st.session_state.txn_sources["zerodha_tradebook"] = parsed
                 st.rerun()
             except Exception as e: st.error(str(e))
-        if "zerodha_tradebook" in st.session_state.txn_sources:
-            if st.button("🗑️ Clear Zerodha tradebook data", key="zt_clear"):
-                del st.session_state.txn_sources["zerodha_tradebook"]
-                st.session_state.uploader_nonce["zt"] += 1
-                st.rerun()
 
     with src_kuvera:
         kv_holder = _holder_picker("kv_holder")
@@ -878,11 +920,6 @@ with tab_connect:
                     st.session_state.txn_sources["kuvera_statement"] = kv_txns
                     st.rerun()
             except Exception as e: st.error(f"Couldn't read that file: {e}")
-        if "kuvera_statement" in st.session_state.txn_sources:
-            if st.button("🗑️ Clear Kuvera data", key="kv_clear"):
-                del st.session_state.txn_sources["kuvera_statement"]
-                st.session_state.uploader_nonce["kv"] += 1
-                st.rerun()
 
     with src_glc:
         glc_holder = _holder_picker("glc_holder")
@@ -898,11 +935,6 @@ with tab_connect:
                     st.session_state.txn_sources["glc_pms"] = glc_txns
                     st.rerun()
             except Exception as e: st.error(f"Couldn't read that file: {e}")
-        if "glc_pms" in st.session_state.txn_sources:
-            if st.button("🗑️ Clear GLC data", key="glc_clear"):
-                del st.session_state.txn_sources["glc_pms"]
-                st.session_state.uploader_nonce["glc"] += 1
-                st.rerun()
 
     with src_manual:
         st.download_button("⬇️ Download template (CSV)", data=pd.DataFrame(columns=TXN_SCHEMA).to_csv(index=False).encode("utf-8"), file_name="transactions_template.csv", mime="text/csv")
@@ -916,8 +948,3 @@ with tab_connect:
                     st.session_state.txn_sources["manual"] = manual_df[TXN_SCHEMA]
                     st.rerun()
             except Exception as e: st.error(str(e))
-        if "manual" in st.session_state.txn_sources:
-            if st.button("🗑️ Clear manual CSV data", key="manual_clear"):
-                del st.session_state.txn_sources["manual"]
-                st.session_state.uploader_nonce["manual"] += 1
-                st.rerun()
