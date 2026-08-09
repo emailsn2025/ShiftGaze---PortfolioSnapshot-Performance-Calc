@@ -638,33 +638,63 @@ if txns is not None and not txns.empty:
 # --------------------------------------------------------------------------
 # Pre-build Charts for UI and Export
 # --------------------------------------------------------------------------
+# Vibrant Color Palette
+color_sequence = px.colors.qualitative.Vivid
+
 # 1. Asset Class Pie Chart
 pie_df = view_data.asset_summary.copy()
-pie_df["Value (formatted)"] = pie_df["Value (₹)"].apply(fmt_inr)
-fig_pie = px.pie(pie_df, values="Value (₹)", names="Asset Class", hole=0.45, custom_data=["Value (formatted)"])
-fig_pie.update_traces(textinfo="percent+label", hovertemplate="%{label}<br>%{customdata[0]}<br>%{percent}<extra></extra>")
-fig_pie.update_layout(showlegend=False, margin=dict(t=10, b=10, l=10, r=10), height=350)
+fig_pie = None
+if not pie_df.empty:
+    pie_df["Value (formatted)"] = pie_df["Value (₹)"].apply(fmt_inr)
+    fig_pie = px.pie(
+        pie_df, values="Value (₹)", names="Asset Class", hole=0.45, 
+        custom_data=["Value (formatted)"], color_discrete_sequence=color_sequence
+    )
+    fig_pie.update_traces(textinfo="percent+label", hovertemplate="%{label}<br>%{customdata[0]}<br>%{percent}<extra></extra>")
+    fig_pie.update_layout(showlegend=False, margin=dict(t=10, b=10, l=10, r=10), height=350)
 
 # 2. Instrument Breakdown Bar Chart
-ib_sorted = view_instrument_breakdown.sort_values("Value (₹)")
-tick_vals = list(ib_sorted["Value (₹)"])
-fig_ib = px.bar(
-    ib_sorted, x="Value (₹)", y="Instrument Type", color="Asset Class", orientation="h",
-    text=ib_sorted["Value (₹)"].apply(fmt_inr_short),
-)
-fig_ib.update_traces(textposition="outside", cliponaxis=False)
-fig_ib.update_xaxes(tickvals=tick_vals, ticktext=[fmt_inr_short(v) for v in tick_vals], title="")
-fig_ib.update_layout(margin=dict(t=40, b=10, l=10, r=10), height=100 + 32 * len(ib_sorted), yaxis_title="", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
+fig_ib = None
+if not view_instrument_breakdown.empty:
+    ib_sorted = view_instrument_breakdown.sort_values("Value (₹)")
+    fig_ib = px.bar(
+        ib_sorted, x="Value (₹)", y="Instrument Type", color="Asset Class", orientation="h",
+        text=ib_sorted["Value (₹)"].apply(fmt_inr_short), color_discrete_sequence=color_sequence
+    )
+    fig_ib.update_traces(textposition="outside", cliponaxis=False)
+    # Removing tickvals to prevent overlapping axis text
+    fig_ib.update_xaxes(title="Value (₹)")
+    fig_ib.update_layout(
+        margin=dict(t=40, b=10, l=10, r=10), height=100 + 32 * len(ib_sorted), 
+        yaxis_title="", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
+    )
 
 # 3. 12-Month Trend Line Chart
 fig_trend = None
 if not data.valuation_trend.empty:
-    fig_trend = px.line(data.valuation_trend, x="Month", y="Portfolio Value (₹)", markers=True)
-    trend_ticks = list(data.valuation_trend["Portfolio Value (₹)"])
-    fig_trend.update_yaxes(tickvals=trend_ticks, ticktext=[fmt_inr_short(v) for v in trend_ticks], title="")
+    fig_trend = px.line(
+        data.valuation_trend, x="Month", y="Portfolio Value (₹)", markers=True, 
+        color_discrete_sequence=color_sequence
+    )
+    # Removing tickvals to prevent overlapping axis text
+    fig_trend.update_yaxes(title="Portfolio Value (₹)")
     fig_trend.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=350)
 
-export_charts = [fig for fig in [fig_pie, fig_ib, fig_trend] if fig is not None]
+# 4. Bubble Chart (Pre-generated for PDF export using Asset Class)
+fig_bubble_export = None
+if not xirr_by_asset_class_df.empty:
+    chart_df_exp = xirr_by_asset_class_df.dropna(subset=["XIRR (%)"]).copy()
+    if not chart_df_exp.empty:
+        chart_df_exp["Current Value"] = chart_df_exp["Current Value (₹)"].apply(fmt_inr)
+        fig_bubble_export = px.scatter(
+            chart_df_exp, x="Asset Class", y="XIRR (%)", size="Current Value (₹)",
+            color="Asset Class", size_max=70, color_discrete_sequence=color_sequence,
+            title="Size vs. Return (by Asset Class)",
+            hover_data={"Current Value (₹)": False, "Current Value": True, "Asset Class": False}
+        )
+        fig_bubble_export.add_hline(y=0, line_dash="dot", line_color="grey")
+
+export_charts = [fig for fig in [fig_pie, fig_ib, fig_trend, fig_bubble_export] if fig is not None]
 
 # --------------------------------------------------------------------------
 # Download everything - Excel workbook + PDF report, from whatever's loaded
@@ -745,27 +775,26 @@ with st.container(border=True):
 # --------------------------------------------------------------------------
 
 with tab_summary:
-    left, right = st.columns([3, 2])
-    with left:
-        st.subheader("Holdings by asset class")
-        display_df = view_asset_summary.copy()
-        display_df["Value (₹)"] = display_df["Value (₹)"].apply(fmt_inr)
-        display_df["% of Portfolio"] = display_df["% of Portfolio"].apply(lambda x: f"{x:.2f}%")
-        if "Change vs Last Month (₹)" in display_df.columns:
-            display_df["Change vs Last Month (₹)"] = display_df["Change vs Last Month (₹)"].apply(fmt_inr)
-            display_df["Change vs Last Month (%)"] = display_df["Change vs Last Month (%)"].apply(
-                lambda x: f"{x:+.2f}%" if pd.notna(x) else "-"
-            )
-        total_specs = {"Value (₹)": fmt_inr, "% of Portfolio": lambda x: f"{x:.2f}%"}
-        if "Change vs Last Month (₹)" in view_asset_summary.columns:
-            total_specs["Change vs Last Month (₹)"] = fmt_inr
-        display_df = _with_total_row(display_df, view_asset_summary, total_specs)
-        st.dataframe(display_df, hide_index=True, width="stretch")
-        if "Change vs Last Month (₹)" not in view_asset_summary.columns:
-            st.caption("💡 Upload last month's CAS in the sidebar to see variance columns here.")
-    with right:
+    st.subheader("Holdings by asset class")
+    if fig_pie:
         st.plotly_chart(fig_pie, use_container_width=True)
-
+    
+    display_df = view_asset_summary.copy()
+    display_df["Value (₹)"] = display_df["Value (₹)"].apply(fmt_inr)
+    display_df["% of Portfolio"] = display_df["% of Portfolio"].apply(lambda x: f"{x:.2f}%")
+    if "Change vs Last Month (₹)" in display_df.columns:
+        display_df["Change vs Last Month (₹)"] = display_df["Change vs Last Month (₹)"].apply(fmt_inr)
+        display_df["Change vs Last Month (%)"] = display_df["Change vs Last Month (%)"].apply(
+            lambda x: f"{x:+.2f}%" if pd.notna(x) else "-"
+        )
+    total_specs = {"Value (₹)": fmt_inr, "% of Portfolio": lambda x: f"{x:.2f}%"}
+    if "Change vs Last Month (₹)" in view_asset_summary.columns:
+        total_specs["Change vs Last Month (₹)"] = fmt_inr
+    display_df = _with_total_row(display_df, view_asset_summary, total_specs)
+    st.dataframe(display_df, hide_index=True, width="stretch")
+    if "Change vs Last Month (₹)" not in view_asset_summary.columns:
+        st.caption("💡 Upload last month's CAS in the sidebar to see variance columns here.")
+        
     st.markdown("---")
     st.subheader("Breakdown by instrument type")
     st.caption(
@@ -774,6 +803,9 @@ with tab_summary:
         "& PSU Fund. Inferred from scheme/security names, since the CAS itself doesn't "
         "label this."
     )
+    if fig_ib:
+        st.plotly_chart(fig_ib, use_container_width=True)
+        
     ib_display = view_instrument_breakdown.copy()
     ib_display["Value (₹)"] = ib_display["Value (₹)"].apply(fmt_inr)
     ib_display["% of Portfolio"] = ib_display["% of Portfolio"].apply(lambda x: f"{x:.2f}%")
@@ -787,8 +819,6 @@ with tab_summary:
         ib_total_specs["Change vs Last Month (₹)"] = fmt_inr
     ib_display = _with_total_row(ib_display, view_instrument_breakdown, ib_total_specs)
     st.dataframe(ib_display, hide_index=True, width="stretch")
-
-    st.plotly_chart(fig_ib, use_container_width=True)
 
 
 # --------------------------------------------------------------------------
@@ -1306,6 +1336,38 @@ with tab_xirr:
                 st.caption("Every holding in your portfolio has transaction history loaded - full coverage.")
 
         st.markdown("---")
+        
+        # BUBBLE CHART MOVED HERE
+        st.subheader("Size vs. return")
+        st.caption(
+            "Bubble size is current value, position on the vertical axis is XIRR - lets you "
+            "see at a glance whether your biggest holdings are also your best performers, or "
+            "not."
+        )
+        chart_options = ["Instrument Type", "Asset Class"] + (["Holder"] if is_family else [])
+        chart_level = st.radio("Compare by", chart_options, horizontal=True, key="xirr_chart_level")
+        chart_source = {
+            "Instrument Type": xirr_by_instrument_type_df,
+            "Asset Class": xirr_by_asset_class_df,
+            "Holder": xirr_by_holder_df,
+        }[chart_level]
+        chart_df = chart_source.dropna(subset=["XIRR (%)"]).copy()
+        if chart_df.empty:
+            st.caption("No solvable XIRR values yet to plot.")
+        else:
+            chart_df["Current Value"] = chart_df["Current Value (₹)"].apply(fmt_inr)
+            fig_bubble = px.scatter(
+                chart_df, x=chart_level, y="XIRR (%)", size="Current Value (₹)",
+                color=chart_level, size_max=70, color_discrete_sequence=color_sequence,
+                hover_data={"Current Value (₹)": False, "Current Value": True, chart_level: False},
+            )
+            fig_bubble.update_layout(
+                margin=dict(t=10, b=10, l=10, r=10), height=450, showlegend=False, xaxis_title="",
+            )
+            fig_bubble.add_hline(y=0, line_dash="dot", line_color="grey")
+            st.plotly_chart(fig_bubble, use_container_width=True)
+            
+        st.markdown("---")
 
         def _fmt_xirr_table(df: pd.DataFrame) -> pd.DataFrame:
             out = df.copy()
@@ -1333,36 +1395,6 @@ with tab_xirr:
             "way to compute a blended XIRR for a group of holdings."
         )
         st.dataframe(_fmt_xirr_table(xirr_by_instrument_type_df), hide_index=True, width="stretch")
-
-        st.markdown("---")
-        st.subheader("Size vs. return")
-        st.caption(
-            "Bubble size is current value, position on the vertical axis is XIRR - lets you "
-            "see at a glance whether your biggest holdings are also your best performers, or "
-            "not."
-        )
-        chart_options = ["Instrument Type", "Asset Class"] + (["Holder"] if is_family else [])
-        chart_level = st.radio("Compare by", chart_options, horizontal=True, key="xirr_chart_level")
-        chart_source = {
-            "Instrument Type": xirr_by_instrument_type_df,
-            "Asset Class": xirr_by_asset_class_df,
-            "Holder": xirr_by_holder_df,
-        }[chart_level]
-        chart_df = chart_source.dropna(subset=["XIRR (%)"]).copy()
-        if chart_df.empty:
-            st.caption("No solvable XIRR values yet to plot.")
-        else:
-            chart_df["Current Value"] = chart_df["Current Value (₹)"].apply(fmt_inr)
-            fig_bubble = px.scatter(
-                chart_df, x=chart_level, y="XIRR (%)", size="Current Value (₹)",
-                color=chart_level, size_max=70,
-                hover_data={"Current Value (₹)": False, "Current Value": True, chart_level: False},
-            )
-            fig_bubble.update_layout(
-                margin=dict(t=10, b=10, l=10, r=10), height=450, showlegend=False, xaxis_title="",
-            )
-            fig_bubble.add_hline(y=0, line_dash="dot", line_color="grey")
-            st.plotly_chart(fig_bubble, width="stretch")
 
 
 # --------------------------------------------------------------------------
