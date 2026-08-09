@@ -501,19 +501,28 @@ if not pie_df.empty:
     fig_pie.update_traces(textinfo="percent+label", hovertemplate="%{label}<br>%{customdata[0]}<br>%{percent}<extra></extra>")
     fig_pie.update_layout(showlegend=False, margin=dict(t=10, b=10, l=10, r=10), height=350)
 
-# 2. Bar Chart (Descending Visually)
+# 2. Instrument Breakdown Bar Chart
 fig_ib = None
 if not view_instrument_breakdown.empty:
-    ib_sorted = view_instrument_breakdown.sort_values("Value (₹)", ascending=True) # Plotly renders the last item at the top!
-    fig_ib = px.bar(ib_sorted, x="Value (₹)", y="Instrument Type", color="Asset Class", orientation="h", text=ib_sorted["Value (₹)"].apply(fmt_inr_short), color_discrete_map=ASSET_COLORS)
+    ib_sorted = view_instrument_breakdown.sort_values("Value (₹)", ascending=True) 
+    fig_ib = px.bar(
+        ib_sorted, x="Value (₹)", y="Instrument Type", color="Asset Class", orientation="h", 
+        text=ib_sorted["Value (₹)"].apply(fmt_inr_short), color_discrete_map=ASSET_COLORS
+    )
     fig_ib.update_traces(textposition="outside", cliponaxis=False)
+    
+    # Explicitly force Plotly to sort the categories by total value
+    # 'total ascending' puts the lowest value at the bottom (y=0) and the highest at the top
+    fig_ib.update_yaxes(categoryorder="total ascending")
     
     # Custom x-axis ticks
     max_val = ib_sorted["Value (₹)"].max() if not ib_sorted.empty else 0
     ticks = get_axis_ticks(0, max_val, n=6)
     fig_ib.update_xaxes(tickvals=ticks, ticktext=[fmt_inr_short(v) for v in ticks], title="Value (₹)")
-    fig_ib.update_layout(margin=dict(t=40, b=10, l=10, r=10), height=100 + 32 * len(ib_sorted), yaxis_title="", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
-
+    fig_ib.update_layout(
+        margin=dict(t=40, b=10, l=10, r=10), height=100 + 32 * len(ib_sorted), 
+        yaxis_title="", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
+    )
 # 3. Line Chart
 fig_trend = None
 if not data.valuation_trend.empty:
